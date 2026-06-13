@@ -81,7 +81,7 @@ def handle_start(message):
     if len(args) > 1 and user_db[uid]["invited_by"] is None:
         ref_id = args[1]
         if ref_id != uid and ref_id in user_db:
-            server_url = "https://THAY_LINK_WEB_CỦA_BẠN_VÀO_ĐÂY.onrender.com" 
+            server_url = "https://bot-kiem-tra-ip.onrender.com" 
             verify_link = f"{server_url}/verify/{uid}/{ref_id}"
             
             msg = (
