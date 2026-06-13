@@ -1,3 +1,4 @@
+import time
 import os
 import threading
 import telebot
@@ -320,7 +321,52 @@ def admin_reject_money_with_reason(message):
 def run_web():
     app.run(host='0.0.0.0', port=8080)
 
-if __name__ == '__main__':
+if __name__ == '__main__':# ========================================================
+# 📣 TÍNH NĂNG MỚI: GỬI THÔNG BÁO TỰ ĐỘNG HÀNG LOẠT
+# ========================================================
+@bot.message_handler(commands=['thongbao'])
+def admin_broadcast_message(message):
+    # Xác thực quyền Admin tuyệt đối bằng ID
+    if str(message.from_user.id) != str(ADMIN_ID): 
+        return
+    
+    # Bóc tách nội dung tin nhắn đằng sau chữ /thongbao
+    broadcast_text = message.text.replace('/thongbao', '').strip()
+    if not broadcast_text:
+        bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ:\n`/thongbao [Nội dung thông báo cần gửi hàng loạt]`")
+        return
+        
+    all_users = list(user_db.keys())
+    total_users = len(all_users)
+    
+    status_msg = bot.reply_to(message, f"🚀 **Bắt đầu gửi thông báo hàng loạt...**\n🎯 Tổng mục tiêu: `{total_users}` người dùng.")
+    
+    success_count = 0
+    fail_count = 0
+    
+    # Vòng lặp gửi tin nhắn tới từng ID người dùng trong database có sẵn
+    for index, target_id in enumerate(all_users):
+        try:
+            bot.send_message(int(target_id), f"📣 **THÔNG BÁO TỪ BAN QUẢN TRỊ:**\n\n{broadcast_text}", parse_mode='Markdown')
+            success_count += 1
+        except Exception:
+            # Trường hợp người dùng đã chặn (block) bot hoặc tài khoản bị xóa
+            fail_count += 1
+            
+        # ⏱️ Giãn cách thông minh: Cứ gửi 20 tin nhắn thì dừng lại 1 giây 
+        # Giúp bot không bị Telegram đánh dấu spam hoặc lỗi "Too Many Requests"
+        if index % 20 == 0 and index > 0:
+            time.sleep(1)
+            
+    # Báo cáo kết quả cuối cùng cho Admin sau khi gửi xong
+    bot.edit_message_text(
+        f"✅ **Hoàn tất chiến dịch thông báo!**\n\n"
+        f"📊 **Kết quả thống kê:**\n"
+        f"▪️ Gửi thành công: `{success_count}/{total_users}`\n"
+        f"▪️ Thất bại (Chặn bot/Nick ảo): `{fail_count}`",
+        status_msg.chat.id, status_msg.message_id
+    )
+
     threading.Thread(target=run_web).start()
     print("=== NEW BOT SYSTEM ONLINE WITH 24H WITHDRAW TIMELINE ===")
     bot.infinity_polling()
