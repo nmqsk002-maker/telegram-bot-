@@ -321,17 +321,15 @@ def admin_reject_money_with_reason(message):
 def run_web():
     app.run(host='0.0.0.0', port=8080)
 
-if __name__ == '__main__':# ========================================================
+if __name__ == '__main__':
 # ========================================================
 # 📣 TÍNH NĂNG MỚI: GỬI THÔNG BÁO QUYỀN LỰC HÀNG LOẠT (V3)
 # ========================================================
 @bot.message_handler(commands=['thongbao'])
 def admin_broadcast_message(message):
-    # Xác thực quyền Admin tuyệt đối bằng ID
     if str(message.from_user.id) != str(ADMIN_ID): 
         return
     
-    # Bóc tách nội dung tin nhắn đằng sau chữ /thongbao
     broadcast_text = message.text.replace('/thongbao', '').strip()
     if not broadcast_text:
         bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ:\n`/thongbao [Nội dung thông báo cần gửi hàng loạt]`")
@@ -342,7 +340,6 @@ def admin_broadcast_message(message):
     
     status_msg = bot.reply_to(message, f"⚡ **ĐANG PHÁT LỆNH THÔNG BÁO TOÀN DIỆN...**\n🎯 Tổng mục tiêu: `{total_users}` người dùng.")
     
-    # Thiết kế giao diện thông báo Quyền lực, Trang trọng và Uy tín hơn
     premium_announcement = (
         f"🚨 ⚠️ **THÔNG BÁO KHẨN CẤP TỪ BAN QUẢN TRỊ** ⚠️ 🚨\n"
         f"──────────────────────────────\n\n"
@@ -351,31 +348,23 @@ def admin_broadcast_message(message):
         f"📌 *Yêu cầu tất cả thành viên nắm rõ thông tin để tránh thắc mắc.*"
     )
     
-    # Tạo nút bấm nổi gắn kèm dưới mỗi tin nhắn gửi đi
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("💬 Truy Cập Nhóm Chat Chính Thức 👥", url=LINK_NHOM_CHINH_THUC))
     
     success_count = 0
     fail_count = 0
     
-    # Vòng lặp gửi tin nhắn tới từng ID người dùng
     for index, target_id in enumerate(all_users):
         try:
-            bot.send_message(
-                int(target_id), 
-                premium_announcement, 
-                reply_markup=markup, 
-                parse_mode='Markdown'
-            )
+            bot.send_message(int(target_id), premium_announcement, reply_markup=markup, parse_mode='Markdown')
             success_count += 1
-        except Exception:
+        except:
             fail_count += 1
             
-        # Giãn cách thông minh chống khóa Bot (20 tin / 1 giây)
         if index % 20 == 0 and index > 0:
+            import time
             time.sleep(1)
             
-    # Báo cáo kết quả cuối cùng cực kỳ chi tiết cho Admin
     bot.edit_message_text(
         f"👑 **CHIẾN DỊCH PHÁT THÔNG BÁO HOÀN TẤT THÀNH CÔNG!**\n\n"
         f"📊 **Báo cáo trạng thái hệ thống:**\n"
@@ -383,7 +372,7 @@ def admin_broadcast_message(message):
         f"▪️ Thất bại (Nick ảo/Đã chặn Bot): `{fail_count}`",
         status_msg.chat.id, status_msg.message_id
     )
-)
+
 
     threading.Thread(target=run_web).start()
     print("=== NEW BOT SYSTEM ONLINE WITH 24H WITHDRAW TIMELINE ===")
