@@ -14,7 +14,7 @@ app = Flask(__name__)
 DATA_FILE = "user_data_v3.json"
 CHEAT_FILE = "anti_cheat_v3.json"
 
-# ⚙️ CẤU HÌNH THÔNG TIN NHÓM CỦA BẠN (HÃY SỬA 2 DÒNG NÀY THEO ĐÚNG NHÓM CỦA BẠN)
+# ⚙️ CẤU HÌNH THÔNG TIN NHÓM CỦA BẠN (SỬA 2 DÒNG NÀY THEO ĐÚNG NHÓM CỦA BẠN)
 CHAT_GROUP_ID = "-1003898772559"        # Thay bằng ID nhóm của bạn (Có dấu trừ, ví dụ: -100123456789)
 LINK_NHOM_CHINH_THUC = "https://t.me/baoappfreekonap"  # Thay bằng link nhóm của bạn
 
@@ -31,34 +31,36 @@ def save_json(filename, data):
 user_db = load_json(DATA_FILE)
 cheat_db = load_json(CHEAT_FILE)
 
-# 🌐 TRANG WEB QUÉT THIẾT BỊ MÁY (ĐÃ LOẠI BỎ CHECK IP MẠNG)
+# Hàm tiện ích để đếm số lượng bạn bè đã mời thành công
+def count_invited_friends(user_id):
+    count = 0
+    for u_id, info in user_db.items():
+        if info.get("invited_by") == str(user_id):
+            count += 1
+    return count
+
+# 🌐 TRANG WEB QUÉT THIẾT BỊ MÁY CHỐNG GIAN LẬN
 @app.route('/verify/<uid>/<ref_id>')
 def verify_user(uid, ref_id):
     user_agent = request.headers.get('User-Agent', 'Unknown Device')
-    device_fingerprint = str(hash(user_agent)) # Định danh máy bằng thông số thiết bị
+    device_fingerprint = str(hash(user_agent))
     
-    # 1. KIỂM TRA THÀNH VIÊN ĐÃ THỰC SỰ VÀO NHÓM CHƯA
     try:
         member_status = bot.get_chat_member(chat_id=int(CHAT_GROUP_ID), user_id=int(uid)).status
         if member_status in ['left', 'kicked']:
             return "<h3>❌ Thất bại: Bạn chưa bấm tham gia vào Nhóm chính thức của chúng tôi! Hãy vào nhóm trước rồi bấm lại link này.</h3>", 400
-    except Exception as e:
-        # Nếu chưa cấu hình chuẩn ID nhóm, tạm thời bỏ qua để tránh lỗi
-        pass
+    except: pass
 
-    # 2. CHỈ KIỂM TRA TRÙNG THIẾT BỊ MÁY (ANTI-CHEAT DEVICE)
     if device_fingerprint in cheat_db and cheat_db[device_fingerprint] != uid:
         try:
-            bot.send_message(int(ADMIN_ID), f"⚠️ **PHÁT HIỆN GIAN LẬN THIẾT BỊ:**\n👤 User ID: `{uid}` cố tình tạo nick ảo.\n❌ **Lý do:** Trùng thiết bị máy/trình duyệt với tài khoản ID cũ: `{cheat_db[device_fingerprint]}`", parse_mode='Markdown')
+            bot.send_message(int(ADMIN_ID), f"⚠️ **PHÁT HIỆN GIAN LẬN THIẾT BỊ:**\n👤 User ID: `{uid}` cố tình tạo nick ảo.\n❌ **Lý do:** Trùng thiết bị máy với tài khoản ID: `{cheat_db[device_fingerprint]}`", parse_mode='Markdown')
             bot.send_message(int(uid), "❌ **Xác thực thất bại:** Hệ thống phát hiện thiết bị này đã được sử dụng để nhận thưởng trước đó.")
         except: pass
         return "<h3>❌ Xác thực thất bại: Một thiết bị chỉ được tính thưởng một lần duy nhất!</h3>", 400
 
-    # LƯU THIẾT BỊ VÀO BỘ NHỚ CHỐNG CHEAT
     cheat_db[device_fingerprint] = uid
     save_json(CHEAT_FILE, cheat_db)
     
-    # TIẾN HÀNH CỘNG TIỀN NẾU HỢP LỆ
     if uid not in user_db:
         user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": ref_id}
     
@@ -86,18 +88,15 @@ def handle_start(message):
         user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
         save_json(DATA_FILE, user_db)
         
-    # Trường hợp đi qua link mời của người khác
     if len(args) > 1 and user_db[uid]["invited_by"] is None:
         ref_id = args[1]
         if ref_id != uid and ref_id in user_db:
             user_db[uid]["invited_by"] = ref_id
             save_json(DATA_FILE, user_db)
             
-            # Tự động lấy tên miền Render từ cấu hình cũ của bạn
             server_url = "https://bot-kiem-tra-ip.onrender.com" 
             verify_link = f"{server_url}/verify/{uid}/{ref_id}"
             
-            # THIẾT KẾ NÚT BẤM XỊN SÒ THEO QUY TRÌNH 2 BƯỚC
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("1️⃣ Bước 1: Tham Gia Nhóm Chính Thức 👥", url=LINK_NHOM_CHINH_THUC))
             markup.row(InlineKeyboardButton("2️⃣ Bước 2: Bấm Xác Minh Máy Thật 🔒", url=verify_link))
@@ -110,7 +109,6 @@ def handle_start(message):
             bot.send_message(message.chat.id, welcome_invite, reply_markup=markup, parse_mode='Markdown')
             return
 
-    # GIAO DIỆN CHÍNH
     show_main_menu(message.chat.id, uname)
 
 def show_main_menu(chat_id, name):
@@ -133,6 +131,31 @@ def callback_listener(call):
     if uid not in user_db:
         user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
     
+    # --- XỬ LÝ NÚT DUYỆT RÚT TIỀN NHANH DÀNH CHO ADMIN ---
+    if call.data.startswith("wd_approve_") or call.data.startswith("wd_reject_"):
+        if uid != str(ADMIN_ID):
+            bot.answer_callback_query(call.id, "❌ Bạn không có quyền Admin!")
+            return
+            
+        action, target_uid, amount = call.data.split("_")[1:]
+        amount = int(amount)
+        
+        if action == "approve":
+            bot.edit_message_text(f"✅ **Đã duyệt chi:** Đã xác nhận chuyển khoản khoản tiền `{amount:,}đ` cho User ID `{target_uid}`.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+            try:
+                bot.send_message(int(target_uid), f"💸 **THÔNG BÁO TIN VUI:**\nLệnh rút tiền giá trị `{amount:,}đ` của bạn đã được Admin phê duyệt thành công! Bạn hãy kiểm tra tài khoản ngân hàng của mình nhé.")
+            except: pass
+            
+        elif action == "reject":
+            user_db[target_uid]["balance"] += amount
+            save_json(DATA_FILE, user_db)
+            bot.edit_message_text(f"❌ **Đã từ chối nhanh:** Hủy lệnh rút tiền `{amount:,}đ` của User ID `{target_uid}` và hoàn lại tiền vào ví của họ.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+            try:
+                bot.send_message(int(target_uid), f"⚠️ **THÔNG BÁO TỪ CHỐI:**\nLệnh rút tiền `{amount:,}đ` của bạn không được phê duyệt. Tiền đã được hoàn lại về ví của bạn trên bot.")
+            except: pass
+        return
+
+    # --- MENU NGƯỜI DÙNG THƯỜNG ---
     if call.data == "menu_link":
         bot_info = bot.get_me()
         invite_url = f"https://t.me/{bot_info.username}?start={uid}"
@@ -145,8 +168,10 @@ def callback_listener(call):
     elif call.data == "menu_vi":
         balance = user_db[uid]["balance"]
         bank = user_db[uid]["bank"]
+        invited_count = count_invited_friends(uid) # Gọi hàm đếm số bạn bè đã mời
         text = (
             f"💳 **THÔNG TIN TÀI KHOẢN VÍ**\n\n"
+            f"👥 **Số bạn bè đã mời:** `{invited_count} người`\n" # <--- THÊM HIỂN THỊ Ở ĐÂY
             f"💰 **Số dư hiện tại:** `{balance:,}đ`\n"
             f"🏦 **Ngân hàng liên kết:** `{bank}`\n\n"
             f"_(Hạn mức rút tiền tối thiểu của hệ thống là 10.000đ)_"
@@ -175,9 +200,33 @@ def callback_listener(call):
         save_json(DATA_FILE, user_db)
         
         bot.send_message(call.message.chat.id, f"✅ **Gửi lệnh rút tiền thành công!** Hệ thống đã trừ `{amount:,}đ` trong ví của bạn và chuyển tiếp tới lệnh phê duyệt của Admin. Vui lòng chờ tiền về tài khoản ngân hàng.")
+        
+        admin_markup = InlineKeyboardMarkup()
+        admin_markup.row(
+            InlineKeyboardButton("✅ Duyệt Chi", callback_data=f"wd_approve_{uid}_{amount}"),
+            InlineKeyboardButton("❌ Từ Chối Nhanh", callback_data=f"wd_reject_{uid}_{amount}")
+        )
         try:
-            bot.send_message(int(ADMIN_ID), f"🚨 **YÊU CẦU RÚT TIỀN MỚI:**\n👤 Người rút (ID): `{uid}`\n💰 Số tiền yêu cầu: `{amount:,}đ`\n🏦 Tài khoản nhận: `{bank}`", parse_mode='Markdown')
+            bot.send_message(int(ADMIN_ID), f"🚨 **YÊU CẦU RÚT TIỀN MỚI:**\n👤 Người rút (ID): `{uid}`\n💰 Số tiền yêu cầu: `{amount:,}đ`\n🏦 Tài khoản nhận: `{bank}`\n\n👉 *Mẹo:* Bạn có thể bấm nút duyệt nhanh bên dưới, hoặc dùng lệnh gõ tay dưới đây để từ chối kèm lý do phạt:\n`/tuchoi {uid} {amount} Lý do cụ thể ở đây`", reply_markup=admin_markup, parse_mode='Markdown')
         except: pass
+
+
+# 📝 LỆNH /VI (GÕ LỆNH TAY CŨNG HIỂN THỊ SỐ NGƯỜI ĐÃ MỜI)
+@bot.message_handler(commands=['vi'])
+def check_wallet_cmd(message):
+    uid = str(message.from_user.id)
+    if uid not in user_db:
+        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
+    balance = user_db[uid]["balance"]
+    bank = user_db[uid]["bank"]
+    invited_count = count_invited_friends(uid)
+    text = (
+        f"💳 **THÔNG TIN TÀI KHOẢN VÍ**\n\n"
+        f"👥 **Số bạn bè đã mời:** `{invited_count} người`\n" # <--- THÊM HIỂN THỊ Ở ĐÂY
+        f"💰 **Số dư hiện tại:** `{balance:,}đ`\n"
+        f"🏦 **Ngân hàng liên kết:** `{bank}`"
+    )
+    bot.reply_to(message, text, parse_mode='Markdown')
 
 
 # 📝 CÚ PHÁP LỆNH DÀNH CHO /NGANHANG
@@ -194,33 +243,48 @@ def link_bank(message):
     user_db[uid]["bank"] = bank_info
     save_json(DATA_FILE, user_db)
     bot.reply_to(message, f"🎯 **Thành công:** Đã cập nhật tài khoản nhận tiền của bạn: `{bank_info}`")
-    # LỆNH ẨN DÀNH RIÊNG CHO ADMIN ĐỂ CỘNG TIỀN
+
+
+# ========================================================
+# 🔥 CÁC LỆNH QUYỀN LỰC DÀNH RIÊNG CHO ADMIN 🔥
+# ========================================================
+
+# 1. LỆNH CỘNG TIỀN THỦ CÔNG
 @bot.message_handler(commands=['congtien'])
 def admin_add_money(message):
-    uid = str(message.from_user.id)
-    # Chỉ có tài khoản có ID trùng với ADMIN_ID mới dùng được lệnh này
-    if uid != str(ADMIN_ID):
-        return
-        
+    if str(message.from_user.id) != str(ADMIN_ID): return
     try:
-        # Cú pháp: /congtien [ID_Người_Dùng] [Số_Tiền]
-        # Ví dụ: /congtien 123456789 5000
         args = message.text.split()
         target_id = args[1]
         amount = int(args[2])
-        
-        if target_id not in user_db:
-            user_db[target_id] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-            
+        if target_id not in user_db: user_db[target_id] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
         user_db[target_id]["balance"] += amount
         save_json(DATA_FILE, user_db)
-        
         bot.reply_to(message, f"✅ Đã cộng thành công **+{amount:,}đ** cho tài khoản ID: `{target_id}`")
+        try: bot.send_message(int(target_id), f"💰 Admin vừa cộng **+{amount:,}đ** vào ví của bạn!")
+        except: pass
+    except: bot.reply_to(message, "⚠️ Gõ lệnh: `/congtien [ID_Telegram] [Số_Tiền]`")
+
+# 2. LỆNH TỪ CHỐI DUYỆT TIỀN + KÈM LÝ DO CỤ THỂ
+@bot.message_handler(commands=['tuchoi'])
+def admin_reject_money_with_reason(message):
+    if str(message.from_user.id) != str(ADMIN_ID): return
+    try:
+        args = message.text.split(maxsplit=3)
+        target_id = args[1]
+        amount = int(args[2])
+        reason = args[3]
+        
+        if target_id in user_db:
+            user_db[target_id]["balance"] += amount
+            save_json(DATA_FILE, user_db)
+            
+        bot.reply_to(message, f"❌ **Đã xử lý từ chối:** Hủy yêu cầu rút `{amount:,}đ` của ID `{target_id}`.\n📌 Lý do: {reason}")
         try:
-            bot.send_message(int(target_id), f"💰 Admin vừa cộng **+{amount:,}đ** vào ví của bạn do hệ thống bảo trì cập nhật dữ liệu!")
+            bot.send_message(int(target_id), f"❌ **LỆNH RÚT TIỀN BỊ TỪ CHỐI:**\nYêu cầu rút `{amount:,}đ` của bạn đã bị Admin từ chối.\n⚠️ **Lý do hệ thống đưa ra:** {reason}\n_(Số tiền đã được hoàn trả lại về số dư ví trên Bot của bạn)_")
         except: pass
     except:
-        bot.reply_to(message, "⚠️ Sai cú pháp admin! Hãy gõ: `/congtien [ID_Telegram] [Số_Tiền]`")
+        bot.reply_to(message, "⚠️ Cú pháp lệnh từ chối: `/tuchoi [ID_Người_Dùng] [Số_Tiền] [Lý do viết tiếng Việt tự do]`")
 
 
 def run_web():
@@ -228,5 +292,5 @@ def run_web():
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print("=== NEW BOT SYSTEM ONLINE WITH DEVICE FINGERPRINT CHECK ===")
+    print("=== NEW BOT SYSTEM ONLINE WITH INVITED FRIEND COUNT ===")
     bot.infinity_polling()
