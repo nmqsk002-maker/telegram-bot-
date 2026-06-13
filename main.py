@@ -1,9 +1,9 @@
-import time
 import os
 import threading
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from flask import Flask, request
+import time
 
 # 🔐 CẤU HÌNH BIẾN MÔI TRƯỜNG (LẤY TỪ RENDER)
 TOKEN = os.environ.get('BOT_TOKEN')
@@ -123,13 +123,18 @@ def verify_user(uid, ref_id):
     return "<h3>✅ Xác thực thành công! Hệ thống ghi nhận bạn là người dùng thật. Hãy quay lại Telegram.</h3>", 200
 
 
-# 📥 LỆNH /START KHI THÀNH VIÊN NHẤN VÀO LINK MỜI
+# 📥 LỆNH /START
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     uid = str(message.from_user.id)
     uname = message.from_user.first_name
     args = message.text.split()
     
+    clear_markup = ReplyKeyboardRemove()
+    
+    try: bot.delete_message(message.chat.id, message.message_id)
+    except: pass
+
     if uid not in user_db:
         user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
         save_json(DATA_FILE, user_db)
@@ -155,9 +160,9 @@ def handle_start(message):
             bot.send_message(message.chat.id, welcome_invite, reply_markup=markup, parse_mode='Markdown')
             return
 
-    show_main_menu(message.chat.id, uname)
+    show_main_menu(message.chat.id, uname, clear_markup)
 
-def show_main_menu(chat_id, name):
+def show_main_menu(chat_id, name, reply_markup_remove=None):
     main_text = (
         f"👑 **HỆ THỐNG KIẾM TIỀN CHÍNH THỨC V2** 👑\n\n"
         f"Chào mừng **{name}** đã quay trở lại! Dưới đây là bảng điều khiển chức năng cá nhân của bạn. Hãy bấm vào các nút menu bên dưới để thao tác nhanh chóng:\n\n"
@@ -178,6 +183,15 @@ def callback_listener(call):
     if uid not in user_db:
         user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
     
+    valid_callbacks = ["menu_link", "menu_vi", "menu_nh", "menu_rut", "wd_approve_", "wd_reject_"]
+    is_valid = any(call.data.startswith(cb) for cb in valid_callbacks)
+    
+    if not is_valid:
+        bot.answer_callback_query(call.id, "⚠️ Nút bấm cũ đã hết hạn! Vui lòng gõ /start để tải lại Menu mới.", show_alert=True)
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        return
+
     # --- XỬ LÝ NÚT DUYỆT RÚT TIỀN NHANH DÀNH CHO ADMIN ---
     if call.data.startswith("wd_approve_") or call.data.startswith("wd_reject_"):
         if uid != str(ADMIN_ID):
@@ -194,11 +208,14 @@ def callback_listener(call):
             except: pass
             
         elif action == "reject":
+            if target_uid not in user_db:
+                user_db[target_uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
             user_db[target_uid]["balance"] += amount
             save_json(DATA_FILE, user_db)
+            
             bot.edit_message_text(f"❌ **Đã từ chối nhanh:** Hủy lệnh rút tiền `{amount:,}đ` của User ID `{target_uid}` và hoàn lại tiền vào ví của họ.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
             try:
-                bot.send_message(int(target_uid), f"⚠️ **THÔNG BÁO TỪ CHỐI:**\nLệnh rút tiền `{amount:,}đ` của bạn không được phê duyệt. Tiền đã được hoàn lại về ví của bạn trên bot.")
+                bot.send_message(int(target_uid), f"⚠️ **THÔNG BÁO TỪ CHỐI:**\nLệnh rút tiền `{amount:,}đ` của bạn không được phê duyệt. Toàn bộ số tiền đã được hệ thống hoàn trả về ví trên Bot của bạn.")
             except: pass
         return
 
@@ -218,7 +235,7 @@ def callback_listener(call):
         
     elif call.data == "menu_nh":
         text = (
-            f"🏦 **HƯỚNG DẪN LIÊN KẾT NGÂN HÀNG**\n\n"
+            f"🏦 **HƯỚNG DẰN LIÊN KẾT NGÂN HÀNG**\n\n"
             f"Vui lòng gõ tin nhắn theo đúng cú pháp định dạng dấu gạch ngang (`-`) dưới đây để hệ thống tự động bóc tách phân loại số tài khoản rõ ràng:\n\n"
             f"👉 Cú pháp: `/nganhang [Tên Ngân Hàng] - [Số Tài Khoản] - [Tên Chủ Khoản]`\n\n"
             f"⚠️ *Ví dụ gõ đúng:* `/nganhang MB Bank - 0333444555 - NGUYEN VAN A`"
@@ -226,20 +243,55 @@ def callback_listener(call):
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
         
     elif call.data == "menu_rut":
-        if user_db[uid]["balance"] < 10000:
-            bot.send_message(call.message.chat.id, f"❌ **Rút tiền thất bại:** Số dư trong ví của bạn phải đạt tối thiểu từ **10.000đ** trở lên.\n\n⏱️ *Thời gian xử lý sau khi đủ điều kiện rút là trong vòng 24h.*")
-            return
         if user_db[uid]["bank"] == "Chưa liên kết":
             bot.send_message(call.message.chat.id, "⚠️ **Thông báo:** Bạn chưa liên kết ngân hàng nhận tiền. Hãy bấm nút **Liên Kết Ngân Hàng** trước.")
             return
+        if user_db[uid]["balance"] < 10000:
+            bot.send_message(call.message.chat.id, f"❌ **Rút tiền thất bại:** Số dư trong ví của bạn phải đạt tối thiểu từ **10.000đ** trở lên.")
+            return
             
-        amount = user_db[uid]["balance"]
+        text = (
+            f"💸 **HƯỚNG DẪN LẬP LỆNH RÚT TIỀN**\n\n"
+            f"Hệ thống cho phép bạn tùy chọn số tiền rút mong muốn (Số dư hiện tại của bạn: `{user_db[uid]['balance']:,}đ`).\n\n"
+            f"👉 Vui lòng gõ tin nhắn theo cú pháp sau:\n"
+            f"`/rut [Số_Tiền_Muốn_Rút]`\n\n"
+            f"⚠️ *Ví dụ gõ đúng để rút mười nghìn:* `/rut 10000`"
+        )
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+
+
+# 📥 LỆNH XỬ LÝ RÚT TIỀN THEO SỐ TIỀN KHÁCH NHẬP THỦ CÔNG
+@bot.message_handler(commands=['rut'])
+def process_custom_withdraw(message):
+    uid = str(message.from_user.id)
+    if uid not in user_db:
+        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
+        
+    if user_db[uid]["bank"] == "Chưa liên kết":
+        bot.reply_to(message, "⚠️ Bạn chưa liên kết ngân hàng nhận tiền. Hãy bấm nút **Liên Kết Ngân Hàng** trước.")
+        return
+
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ ví dụ: `/rut 10000` để chọn rút số tiền mong muốn.")
+            return
+            
+        amount = int(args[1])
+        
+        if amount < 10000:
+            bot.reply_to(message, "❌ **Thất bại:** Hạn mức rút tiền tối thiểu mỗi lần phải từ **10.000đ** trở lên.")
+            return
+            
+        if amount > user_db[uid]["balance"]:
+            bot.reply_to(message, f"❌ **Số dư không đủ:** Số dư ví của bạn hiện chỉ còn `{user_db[uid]['balance']:,}đ`, không thể rút số tiền `{amount:,}đ` được.")
+            return
+            
+        user_db[uid]["balance"] -= amount
         bank = user_db[uid]["bank"]
-        user_db[uid]["balance"] = 0
         save_json(DATA_FILE, user_db)
         
-        # THÔNG BÁO RÕ RÀNG VỀ DÒNG THỜI GIAN 24H
-        bot.send_message(call.message.chat.id, f"✅ **Gửi lệnh rút tiền thành công!** Hệ thống đã trừ `{amount:,}đ` trong ví của bạn và chuyển tiếp tới lệnh phê duyệt của Admin.\n\n⏱️ **Thời gian xử lý:** Tiền sẽ được Admin kiểm tra và chuyển khoản về tài khoản của bạn trong vòng **24h** kể từ thời điểm rút (không tính ngày lễ, Tết). Vui lòng kiên nhẫn chờ đợi nhé!")
+        bot.reply_to(message, f"✅ **Gửi lệnh rút tiền thành công!** Hệ thống đã trừ `{amount:,}đ` trong ví của bạn (Số dư còn lại: `{user_db[uid]['balance']:,}đ`) và chuyển tiếp tới lệnh phê duyệt của Admin.\n\n⏱️ **Thời gian xử lý:** Tiền sẽ được Admin kiểm tra và chuyển khoản về tài khoản của bạn trong vòng **24h** kể từ thời điểm rút.")
         
         admin_markup = InlineKeyboardMarkup()
         admin_markup.row(
@@ -249,6 +301,8 @@ def callback_listener(call):
         try:
             bot.send_message(int(ADMIN_ID), f"🚨 **YÊU CẦU RÚT TIỀN MỚI:**\n👤 Người rút (ID): `{uid}`\n💰 Số tiền yêu cầu: `{amount:,}đ`\n🏦 Tài khoản nhận: `{bank}`\n\n👉 *Mẹo:* Bạn có thể bấm nút duyệt nhanh bên dưới, hoặc dùng lệnh gõ tay dưới đây để từ chối kèm lý do phạt:\n`/tuchoi {uid} {amount} Lý do cụ thể ở đây`", reply_markup=admin_markup, parse_mode='Markdown')
         except: pass
+    except ValueError:
+        bot.reply_to(message, "⚠️ **Lỗi:** Số tiền nhập vào phải là một con số liền mạch, không chứa dấu chấm hay chữ cái (Ví dụ: 10000).")
 
 
 # 📝 LỆNH GÕ TAY /VI
@@ -280,6 +334,54 @@ def link_bank(message):
 # 🔥 CÁC LỆNH QUYỀN LỰC DÀNH RIÊNG CHO ADMIN 🔥
 # ========================================================
 
+# 📣 LỆNH PHÁT THÔNG BÁO QUYỀN LỰC HÀNG LOẠT
+@bot.message_handler(commands=['thongbao'])
+def admin_broadcast_message(message):
+    if str(message.from_user.id) != str(ADMIN_ID): 
+        return
+    
+    broadcast_text = message.text.replace('/thongbao', '').strip()
+    if not broadcast_text:
+        bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ:\n`/thongbao [Nội dung thông báo cần gửi hàng loạt]`")
+        return
+        
+    all_users = list(user_db.keys())
+    total_users = len(all_users)
+    
+    status_msg = bot.reply_to(message, f"⚡ **ĐANG PHÁT LỆNH THÔNG BÁO TOÀN DIỆN...**\n🎯 Tổng mục tiêu: `{total_users}` người dùng.")
+    
+    premium_announcement = (
+        f"🚨 ⚠️ **THÔNG BÁO KHẨN CẤP TỪ BAN QUẢN TRỊ** ⚠️ 🚨\n"
+        f"──────────────────────────────\n\n"
+        f"{broadcast_text}\n\n"
+        f"──────────────────────────────\n"
+        f"📌 *Yêu cầu tất cả thành viên nắm rõ thông tin để tránh thắc mắc.*"
+    )
+    
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("💬 Truy Cập Nhóm Chat Chính Thức 👥", url=LINK_NHOM_CHINH_THUC))
+    
+    success_count = 0
+    fail_count = 0
+    
+    for index, target_id in enumerate(all_users):
+        try:
+            bot.send_message(int(target_id), premium_announcement, reply_markup=markup, parse_mode='Markdown')
+            success_count += 1
+        except Exception:
+            fail_count += 1
+            
+        if index % 20 == 0 and index > 0:
+            time.sleep(1)
+            
+    bot.edit_message_text(
+        f"👑 **CHIẾN DỊCH PHÁT THÔNG BÁO HOÀN TẤT THÀNH CÔNG!**\n\n"
+        f"📊 **Báo cáo trạng thái hệ thống:**\n"
+        f"▪️ Đã tiếp cận: `{success_count}/{total_users}` người dùng thật.\n"
+        f"▪️ Thất bại (Nick ảo/Đã chặn Bot): `{fail_count}`",
+        status_msg.chat.id, status_msg.message_id
+    )
+
 # 1. LỆNH CỘNG TIỀN THỦ CÔNG
 @bot.message_handler(commands=['congtien'])
 def admin_add_money(message):
@@ -306,13 +408,15 @@ def admin_reject_money_with_reason(message):
         amount = int(args[2])
         reason = args[3]
         
-        if target_id in user_db:
-            user_db[target_id]["balance"] += amount
-            save_json(DATA_FILE, user_db)
+        if target_id not in user_db:
+            user_db[target_id] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
             
-        bot.reply_to(message, f"❌ **Đã xử lý từ chối:** Hủy yêu cầu rút `{amount:,}đ` của ID `{target_id}`.\n📌 Lý do: {reason}")
+        user_db[target_id]["balance"] += amount
+        save_json(DATA_FILE, user_db)
+            
+        bot.reply_to(message, f"❌ **Đã xử lý từ chối:** Hủy yêu cầu rút `{amount:,}đ` của ID `{target_id}`.\n📌 Lý do: {reason}\n💰 *Hệ thống đã hoàn trả lại số tiền này vào ví của họ.*")
         try:
-            bot.send_message(int(target_id), f"❌ **LỆNH RÚT TIỀN BỊ TỪ CHỐI:**\nYêu cầu rút `{amount:,}đ` của bạn đã bị Admin từ chối.\n⚠️ **Lý do hệ thống đưa ra:** {reason}\n_(Số tiền đã được hoàn trả lại về số dư ví trên Bot của bạn)_")
+            bot.send_message(int(target_id), f"❌ **LỆNH RÚT TIỀN BỊ TỪ CHỐI:**\nYêu cầu rút `{amount:,}đ` của bạn đã bị Admin từ chối.\n⚠️ **Lý do hệ thống đưa ra:** {reason}\n\n💰 *(Toàn bộ số tiền đã được hoàn trả lại về số dư ví trên Bot của bạn)*")
         except: pass
     except:
         bot.reply_to(message, "⚠️ Cú pháp lệnh từ chối: `/tuchoi [ID_Người_Dùng] [Số_Tiền] [Lý do viết tiếng Việt tự do]`")
@@ -322,67 +426,6 @@ def run_web():
     app.run(host='0.0.0.0', port=8080)
 
 if __name__ == '__main__':
-# ========================================================
-# 📣 LỆNH PHÁT THÔNG BÁO QUYỀN LỰC CHO TOÀN BỘ NGƯỜI DÙNG
-# ========================================================
-@bot.message_handler(commands=['thongbao'])
-def admin_broadcast_message(message):
-    # Kiểm tra quyền Admin bằng ID cấu hình
-    if str(message.from_user.id) != str(ADMIN_ID): 
-        return
-    
-    # Bóc tách nội dung thông báo từ tin nhắn của Admin
-    broadcast_text = message.text.replace('/thongbao', '').strip()
-    if not broadcast_text:
-        bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ:\n`/thongbao [Nội dung thông báo cần gửi hàng loạt]`")
-        return
-        
-    all_users = list(user_db.keys())
-    total_users = len(all_users)
-    
-    # Gửi tin nhắn phản hồi trạng thái ban đầu cho Admin biết Bot bắt đầu chạy
-    status_msg = bot.reply_to(message, f"⚡ **ĐANG PHÁT LỆNH THÔNG BÁO TOÀN DIỆN...**\n🎯 Tổng mục tiêu: `{total_users}` người dùng.")
-    
-    # Khung giao diện quyền lực, chuyên nghiệp gửi tới người chơi
-    premium_announcement = (
-        f"🚨 ⚠️ **THÔNG BÁO KHẨN CẤP TỪ BAN QUẢN TRỊ** ⚠️ 🚨\n"
-        f"──────────────────────────────\n\n"
-        f"{broadcast_text}\n\n"
-        f"──────────────────────────────\n"
-        f"📌 *Yêu cầu tất cả thành viên nắm rõ thông tin để tránh thắc mắc.*"
-    )
-    
-    # Nút bấm nổi hướng về nhóm chat đẩy tương tác
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("💬 Truy Cập Nhóm Chat Chính Thức 👥", url=LINK_NHOM_CHINH_THUC))
-    
-    success_count = 0
-    fail_count = 0
-    
-    # Tiến hành gửi hàng loạt
-    for index, target_id in enumerate(all_users):
-        try:
-            bot.send_message(int(target_id), premium_announcement, reply_markup=markup, parse_mode='Markdown')
-            success_count += 1
-        except Exception:
-            fail_count += 1
-            
-        # Giãn cách thông minh cứ 20 người dừng 1 giây tránh Telegram khóa spam
-        if index % 20 == 0 and index > 0:
-            import time
-            time.sleep(1)
-            
-    # Sửa lại tin nhắn ban đầu để báo cáo kết quả cho Admin
-    bot.edit_message_text(
-        f"👑 **CHIẾN DỊCH PHÁT THÔNG BÁO HOÀN TẤT THÀNH CÔNG!**\n\n"
-        f"📊 **Báo cáo trạng thái hệ thống:**\n"
-        f"▪️ Đã tiếp cận: `{success_count}/{total_users}` người dùng thật.\n"
-        f"▪️ Thất bại (Nick ảo/Đã chặn Bot): `{fail_count}`",
-        status_msg.chat.id, status_msg.message_id
-    )
-
-
-
     threading.Thread(target=run_web).start()
-    print("=== NEW BOT SYSTEM ONLINE WITH 24H WITHDRAW TIMELINE ===")
+    print("=== NEW BOT SYSTEM ONLINE WITH BROADCAST FUNCTION ===")
     bot.infinity_polling()
