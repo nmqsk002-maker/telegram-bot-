@@ -194,6 +194,34 @@ def link_bank(message):
     user_db[uid]["bank"] = bank_info
     save_json(DATA_FILE, user_db)
     bot.reply_to(message, f"🎯 **Thành công:** Đã cập nhật tài khoản nhận tiền của bạn: `{bank_info}`")
+    # LỆNH ẨN DÀNH RIÊNG CHO ADMIN ĐỂ CỘNG TIỀN
+@bot.message_handler(commands=['congtien'])
+def admin_add_money(message):
+    uid = str(message.from_user.id)
+    # Chỉ có tài khoản có ID trùng với ADMIN_ID mới dùng được lệnh này
+    if uid != str(ADMIN_ID):
+        return
+        
+    try:
+        # Cú pháp: /congtien [ID_Người_Dùng] [Số_Tiền]
+        # Ví dụ: /congtien 123456789 5000
+        args = message.text.split()
+        target_id = args[1]
+        amount = int(args[2])
+        
+        if target_id not in user_db:
+            user_db[target_id] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
+            
+        user_db[target_id]["balance"] += amount
+        save_json(DATA_FILE, user_db)
+        
+        bot.reply_to(message, f"✅ Đã cộng thành công **+{amount:,}đ** cho tài khoản ID: `{target_id}`")
+        try:
+            bot.send_message(int(target_id), f"💰 Admin vừa cộng **+{amount:,}đ** vào ví của bạn do hệ thống bảo trì cập nhật dữ liệu!")
+        except: pass
+    except:
+        bot.reply_to(message, "⚠️ Sai cú pháp admin! Hãy gõ: `/congtien [ID_Telegram] [Số_Tiền]`")
+
 
 def run_web():
     app.run(host='0.0.0.0', port=8080)
