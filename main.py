@@ -39,6 +39,51 @@ def count_invited_friends(user_id):
             count += 1
     return count
 
+# Hàm tách thông tin ngân hàng để hiển thị đẹp mắt
+def get_detailed_bank(bank_string):
+    if not bank_string or bank_string == "Chưa liên kết":
+        return {
+            "name": "❌ Chưa liên kết",
+            "stk": "❌ Chưa liên kết",
+            "holder": "❌ Chưa liên kết"
+        }
+    parts = [p.strip() for p in bank_string.split("-")]
+    return {
+        "name": parts[0] if len(parts) > 0 else bank_string,
+        "stk": parts[1] if len(parts) > 1 else "Chưa rõ",
+        "holder": parts[2] if len(parts) > 2 else "Chưa rõ"
+    }
+
+# Hàm tạo văn bản "Trạng thái cá nhân" đầy đủ thông tin
+def build_status_text(user_id, first_name):
+    uid = str(user_id)
+    if uid not in user_db:
+        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
+    
+    balance = user_db[uid]["balance"]
+    bank_raw = user_db[uid]["bank"]
+    invited_count = count_invited_friends(uid)
+    total_earned = invited_count * 1000
+    
+    bank_info = get_detailed_bank(bank_raw)
+    
+    text = (
+        f"📊 **TRẠNG THÁI TÀI KHOẢN CỦA BẠN** 📊\n\n"
+        f"👤 **Người dùng:** {first_name}\n"
+        f"🆔 **ID Telegram:** `{uid}`\n"
+        f"────────────────────────\n"
+        f"👥 **Số bạn bè đã mời:** `{invited_count} người`\n"
+        f"🎁 **Tiền mời bạn bè tích lũy:** `{total_earned:,}đ`\n"
+        f"💰 **Số dư ví hiện tại:** `{balance:,}đ`\n"
+        f"────────────────────────\n"
+        f"🏦 **THÔNG TIN NHẬN TIỀN:**\n"
+        f"▪️ Ngân hàng: `{bank_info['name']}`\n"
+        f"▪️ Số tài khoản: `{bank_info['stk']}`\n"
+        f"▪️ Chủ tài khoản: `{bank_info['holder']}`\n\n"
+        f"⚠️ *Hạn mức rút tiền tối thiểu: 10.000đ*"
+    )
+    return text
+
 # 🌐 TRANG WEB QUÉT THIẾT BỊ MÁY CHỐNG GIAN LẬN
 @app.route('/verify/<uid>/<ref_id>')
 def verify_user(uid, ref_id):
@@ -72,7 +117,7 @@ def verify_user(uid, ref_id):
         except: pass
 
     try:
-        bot.send_message(int(uid), "✅ **Xác thực thành công!** Bạn đã hoàn tất quy trình. Hãy gõ lệnh /vi để kiểm tra ví cá nhân của mình nhé.")
+        bot.send_message(int(uid), "✅ **Xác thực thành công!** Bạn đã hoàn tất quy trình. Hãy gõ lệnh /vi để kiểm tra trạng thái tài khoản của mình nhé.")
     except: pass
     return "<h3>✅ Xác thực thành công! Hệ thống ghi nhận bạn là người dùng thật. Hãy quay lại Telegram.</h3>", 200
 
@@ -119,7 +164,7 @@ def show_main_menu(chat_id, name):
     )
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("🔗 Lấy Link Mời Kiếm Tiền", callback_data="menu_link"))
-    markup.row(InlineKeyboardButton("💳 Kiểm Tra Số Dư Ví", callback_data="menu_vi"), InlineKeyboardButton("🏦 Liên Kết Ngân Hàng", callback_data="menu_nh"))
+    markup.row(InlineKeyboardButton("💳 Kiểm Tra Trạng Thái Ví", callback_data="menu_vi"), InlineKeyboardButton("🏦 Liên Kết Ngân Hàng", callback_data="menu_nh"))
     markup.row(InlineKeyboardButton("💸 Rút Tiền Về Tài Khoản", callback_data="menu_rut"))
     bot.send_message(chat_id, main_text, reply_markup=markup, parse_mode='Markdown')
 
@@ -128,6 +173,7 @@ def show_main_menu(chat_id, name):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_listener(call):
     uid = str(call.from_user.id)
+    uname = call.from_user.first_name
     if uid not in user_db:
         user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
     
@@ -166,29 +212,21 @@ def callback_listener(call):
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
         
     elif call.data == "menu_vi":
-        balance = user_db[uid]["balance"]
-        bank = user_db[uid]["bank"]
-        invited_count = count_invited_friends(uid) # Gọi hàm đếm số bạn bè đã mời
-        text = (
-            f"💳 **THÔNG TIN TÀI KHOẢN VÍ**\n\n"
-            f"👥 **Số bạn bè đã mời:** `{invited_count} người`\n" # <--- THÊM HIỂN THỊ Ở ĐÂY
-            f"💰 **Số dư hiện tại:** `{balance:,}đ`\n"
-            f"🏦 **Ngân hàng liên kết:** `{bank}`\n\n"
-            f"_(Hạn mức rút tiền tối thiểu của hệ thống là 10.000đ)_"
-        )
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+        status_text = build_status_text(uid, uname)
+        bot.send_message(call.message.chat.id, status_text, parse_mode='Markdown')
         
     elif call.data == "menu_nh":
         text = (
             f"🏦 **HƯỚNG DẪN LIÊN KẾT NGÂN HÀNG**\n\n"
-            f"Vui lòng gõ tin nhắn theo đúng cú pháp ví dụ sau để hệ thống lưu thông tin nhận tiền của bạn:\n\n"
-            f"`/nganhang MB Bank - 0333444555 - NGUYEN VAN A`"
+            f"Vui lòng gõ tin nhắn theo đúng cú pháp định dạng dấu gạch ngang (`-`) dưới đây để hệ thống tự động bóc tách phân loại số tài khoản rõ ràng:\n\n"
+            f"👉 Cú pháp: `/nganhang [Tên Ngân Hàng] - [Số Tài Khoản] - [Tên Chủ Khoản]`\n\n"
+            f"⚠️ *Ví dụ gõ đúng:* `/nganhang MB Bank - 0333444555 - NGUYEN VAN A`"
         )
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
         
     elif call.data == "menu_rut":
         if user_db[uid]["balance"] < 10000:
-            bot.send_message(call.message.chat.id, "❌ **Rút tiền thất bại:** Số dư trong ví của bạn phải đạt tối thiểu từ **10.000đ** trở lên.")
+            bot.send_message(call.message.chat.id, f"❌ **Rút tiền thất bại:** Số dư trong ví của bạn phải đạt tối thiểu từ **10.000đ** trở lên.\n\n⏱️ *Thời gian xử lý sau khi đủ điều kiện rút là trong vòng 24h.*")
             return
         if user_db[uid]["bank"] == "Chưa liên kết":
             bot.send_message(call.message.chat.id, "⚠️ **Thông báo:** Bạn chưa liên kết ngân hàng nhận tiền. Hãy bấm nút **Liên Kết Ngân Hàng** trước.")
@@ -199,7 +237,8 @@ def callback_listener(call):
         user_db[uid]["balance"] = 0
         save_json(DATA_FILE, user_db)
         
-        bot.send_message(call.message.chat.id, f"✅ **Gửi lệnh rút tiền thành công!** Hệ thống đã trừ `{amount:,}đ` trong ví của bạn và chuyển tiếp tới lệnh phê duyệt của Admin. Vui lòng chờ tiền về tài khoản ngân hàng.")
+        # THÔNG BÁO RÕ RÀNG VỀ DÒNG THỜI GIAN 24H
+        bot.send_message(call.message.chat.id, f"✅ **Gửi lệnh rút tiền thành công!** Hệ thống đã trừ `{amount:,}đ` trong ví của bạn và chuyển tiếp tới lệnh phê duyệt của Admin.\n\n⏱️ **Thời gian xử lý:** Tiền sẽ được Admin kiểm tra và chuyển khoản về tài khoản của bạn trong vòng **24h** kể từ thời điểm rút (không tính ngày lễ, Tết). Vui lòng kiên nhẫn chờ đợi nhé!")
         
         admin_markup = InlineKeyboardMarkup()
         admin_markup.row(
@@ -211,22 +250,13 @@ def callback_listener(call):
         except: pass
 
 
-# 📝 LỆNH /VI (GÕ LỆNH TAY CŨNG HIỂN THỊ SỐ NGƯỜI ĐÃ MỜI)
+# 📝 LỆNH GÕ TAY /VI
 @bot.message_handler(commands=['vi'])
 def check_wallet_cmd(message):
     uid = str(message.from_user.id)
-    if uid not in user_db:
-        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-    balance = user_db[uid]["balance"]
-    bank = user_db[uid]["bank"]
-    invited_count = count_invited_friends(uid)
-    text = (
-        f"💳 **THÔNG TIN TÀI KHOẢN VÍ**\n\n"
-        f"👥 **Số bạn bè đã mời:** `{invited_count} người`\n" # <--- THÊM HIỂN THỊ Ở ĐÂY
-        f"💰 **Số dư hiện tại:** `{balance:,}đ`\n"
-        f"🏦 **Ngân hàng liên kết:** `{bank}`"
-    )
-    bot.reply_to(message, text, parse_mode='Markdown')
+    uname = message.from_user.first_name
+    status_text = build_status_text(uid, uname)
+    bot.reply_to(message, status_text, parse_mode='Markdown')
 
 
 # 📝 CÚ PHÁP LỆNH DÀNH CHO /NGANHANG
@@ -242,7 +272,7 @@ def link_bank(message):
         
     user_db[uid]["bank"] = bank_info
     save_json(DATA_FILE, user_db)
-    bot.reply_to(message, f"🎯 **Thành công:** Đã cập nhật tài khoản nhận tiền của bạn: `{bank_info}`")
+    bot.reply_to(message, f"🎯 **Thành công:** Đã cập nhật trạng thái tài khoản ngân hàng mới của bạn!")
 
 
 # ========================================================
@@ -292,5 +322,5 @@ def run_web():
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print("=== NEW BOT SYSTEM ONLINE WITH INVITED FRIEND COUNT ===")
+    print("=== NEW BOT SYSTEM ONLINE WITH 24H WITHDRAW TIMELINE ===")
     bot.infinity_polling()
