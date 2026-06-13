@@ -323,13 +323,15 @@ def run_web():
 
 if __name__ == '__main__':
 # ========================================================
-# 📣 TÍNH NĂNG MỚI: GỬI THÔNG BÁO QUYỀN LỰC HÀNG LOẠT (V3)
+# 📣 LỆNH PHÁT THÔNG BÁO QUYỀN LỰC CHO TOÀN BỘ NGƯỜI DÙNG
 # ========================================================
 @bot.message_handler(commands=['thongbao'])
 def admin_broadcast_message(message):
+    # Kiểm tra quyền Admin bằng ID cấu hình
     if str(message.from_user.id) != str(ADMIN_ID): 
         return
     
+    # Bóc tách nội dung thông báo từ tin nhắn của Admin
     broadcast_text = message.text.replace('/thongbao', '').strip()
     if not broadcast_text:
         bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ:\n`/thongbao [Nội dung thông báo cần gửi hàng loạt]`")
@@ -338,8 +340,10 @@ def admin_broadcast_message(message):
     all_users = list(user_db.keys())
     total_users = len(all_users)
     
+    # Gửi tin nhắn phản hồi trạng thái ban đầu cho Admin biết Bot bắt đầu chạy
     status_msg = bot.reply_to(message, f"⚡ **ĐANG PHÁT LỆNH THÔNG BÁO TOÀN DIỆN...**\n🎯 Tổng mục tiêu: `{total_users}` người dùng.")
     
+    # Khung giao diện quyền lực, chuyên nghiệp gửi tới người chơi
     premium_announcement = (
         f"🚨 ⚠️ **THÔNG BÁO KHẨN CẤP TỪ BAN QUẢN TRỊ** ⚠️ 🚨\n"
         f"──────────────────────────────\n\n"
@@ -348,23 +352,27 @@ def admin_broadcast_message(message):
         f"📌 *Yêu cầu tất cả thành viên nắm rõ thông tin để tránh thắc mắc.*"
     )
     
+    # Nút bấm nổi hướng về nhóm chat đẩy tương tác
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("💬 Truy Cập Nhóm Chat Chính Thức 👥", url=LINK_NHOM_CHINH_THUC))
     
     success_count = 0
     fail_count = 0
     
+    # Tiến hành gửi hàng loạt
     for index, target_id in enumerate(all_users):
         try:
             bot.send_message(int(target_id), premium_announcement, reply_markup=markup, parse_mode='Markdown')
             success_count += 1
-        except:
+        except Exception:
             fail_count += 1
             
+        # Giãn cách thông minh cứ 20 người dừng 1 giây tránh Telegram khóa spam
         if index % 20 == 0 and index > 0:
             import time
             time.sleep(1)
             
+    # Sửa lại tin nhắn ban đầu để báo cáo kết quả cho Admin
     bot.edit_message_text(
         f"👑 **CHIẾN DỊCH PHÁT THÔNG BÁO HOÀN TẤT THÀNH CÔNG!**\n\n"
         f"📊 **Báo cáo trạng thái hệ thống:**\n"
@@ -372,6 +380,7 @@ def admin_broadcast_message(message):
         f"▪️ Thất bại (Nick ảo/Đã chặn Bot): `{fail_count}`",
         status_msg.chat.id, status_msg.message_id
     )
+
 
 
     threading.Thread(target=run_web).start()
