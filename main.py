@@ -3,16 +3,7 @@ import telebot
 from telebot import types
 import requests
 
-TELEGRAM_TOKEN = "8673445877:AAHqzQrt2tNeOETRTKxJXj7ak4qF9naLSFA"
-SMAILPRO_API_KEY = "2e77c6695f94c9784452388e9b9dc3f7463e19e16ed05f4125dc838e058c0798"
-ADMIN_ID = 7865006773
-ADMIN_USERNAME = "nmqsk001"
-
-PRICE_PER_MAIL = 500
-MIN_DEPOSIT = 10000
-ITEMS_PER_PAGE = 5  
-SMAILPRO_API_URL = "https://sonjj.com"
-
+TELEGRAM_TOKEN = "
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 def init_db():
