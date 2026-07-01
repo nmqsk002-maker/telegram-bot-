@@ -1,11 +1,9 @@
 def call_smailpro_api_gmail_premium():
-    # Điền API URL cấu hình máy chủ gốc phân phối
     url = "https://sonjj.com" 
     headers = {
         "Authorization": f"Bearer {SMAILPRO_API_KEY}",
         "Accept": "application/json"
     }
-    # Cấu hình đầy đủ các tham số định danh theo tài liệu Sonjj Premium
     params = {
         "domain": "gmail.com",
         "server": "server-2",
@@ -14,21 +12,22 @@ def call_smailpro_api_gmail_premium():
     }
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
+        
+        # IN PHẢN HỒI RA MÀN HÌNH TERMUX ĐỂ ADMIN KIỂM TRA
+        print(f"[DEBUG API] Mã phản hồi: {response.status_code}")
+        print(f"[DEBUG API] Nội dung thô: {response.text}")
+        
         if response.status_code == 200:
-            data = response.json()
-            # Lấy địa chỉ email và mail_id định danh từ JSON trả về
-            return {
-                "success": True, 
-                "email": data.get("email") or data.get("address"), 
-                "mail_id": data.get("mail_id") or data.get("id")
-            }
-        return {"success": False, "error": f"Lỗi HTTP {response.status_code}"}
+            try:
+                data = response.json()
+                return {
+                    "success": True, 
+                    "email": data.get("email") or data.get("address"), 
+                    "mail_id": data.get("mail_id") or data.get("id")
+                }
+            except Exception:
+                return {"success": False, "error": f"Phản hồi không phải JSON. Nội dung: {response.text[:50]}"}
+        else:
+            return {"success": False, "error": f"Lỗi HTTP {response.status_code}. Xem màn hình Termux."}
     except Exception as e:
         return {"success": False, "error": str(e)}
-
-            # Thay đổi Endpoint lấy nội dung hộp thư đến chuẩn của hệ thống
-            check_url = f"https://sonjj.com"
-            headers = {"Authorization": f"Bearer {SMAILPRO_API_KEY}"}
-            try:
-                response = requests.get(check_url, headers=headers, params={"mail_id": mail_id}, timeout=10)
-                messages = response.json()
