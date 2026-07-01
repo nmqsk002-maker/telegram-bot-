@@ -1,431 +1,378 @@
-import os
-import threading
+import sqlite3
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
-from flask import Flask, request
-import time
+from telebot import types
+import requests
 
-# 🔐 CẤU HÌNH BIẾN MÔI TRƯỜNG (LẤY TỪ RENDER)
-TOKEN = os.environ.get('BOT_TOKEN')
-ADMIN_ID = os.environ.get('ADMIN_ID')
-bot = telebot.TeleBot(TOKEN)
+TELEGRAM_TOKEN = "THAY_THE_TOKEN_TELEGRAM_CỦA_BẠN"
+SMAILPRO_API_KEY = "2e77c6695f94c9784452388e9b9dc3f7463e19e16ed05f4125dc838e058c0798"
+ADMIN_ID = 123456789
+ADMIN_USERNAME = "THAY_USERNAME_ADMIN_KHONG_CHUA_DAU_ATC"
 
-app = Flask(__name__)
+PRICE_PER_MAIL = 500
+MIN_DEPOSIT = 10000
+ITEMS_PER_PAGE = 5  
+SMAILPRO_API_URL = "https://sonjj.com"
 
-DATA_FILE = "user_data_v3.json"
-CHEAT_FILE = "anti_cheat_v3.json"
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# ⚙️ CẤU HÌNH THÔNG TIN NHÓM CỦA BẠN (SỬA 2 DÒNG NÀY THEO ĐÚNG NHÓM CỦA BẠN)
-CHAT_GROUP_ID = "-1003898772559"        # Thay bằng ID nhóm của bạn (Có dấu trừ, ví dụ: -100123456789)
-LINK_NHOM_CHINH_THUC = "https://t.me/baoappfreekonap"  # Thay bằng link nhóm của bạn
+def init_db():
+    conn = sqlite3.connect("smailpro_bot.db")
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+                        user_id INTEGER PRIMARY KEY,
+                        username TEXT,
+                        balance INTEGER DEFAULT 0)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS transactions (
+                        tx_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        amount INTEGER,
+                        status TEXT DEFAULT 'PENDING',
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS rented_mails (
+                        rent_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        email TEXT,
+                        mail_id TEXT,
+                        status TEXT DEFAULT 'ACTIVE',
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    conn.commit()
+    conn.close()
 
-def load_json(filename):
-    import json
-    if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8") as f: return json.load(f)
-    return {}
+init_db()
 
-def save_json(filename, data):
-    import json
-    with open(filename, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=4)
+def get_user(user_id, username=""):
+    conn = sqlite3.connect("smailpro_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        cursor.execute("INSERT INTO users (user_id, username, balance) VALUES (?, ?, 0)", (user_id, username))
+        conn.commit()
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user = cursor.fetchone()
+    conn.close()
+    return user
 
-user_db = load_json(DATA_FILE)
-cheat_db = load_json(CHEAT_FILE)
+def update_balance(user_id, amount):
+    conn = sqlite3.connect("smailpro_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
 
-# Hàm tiện ích để đếm số lượng bạn bè đã mời thành công
-def count_invited_friends(user_id):
-    count = 0
-    for u_id, info in user_db.items():
-        if info.get("invited_by") == str(user_id):
-            count += 1
-    return count
+def main_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("📧 Thuê 1 Mail (500đ)", "📦 Thuê Số Lượng")
+    markup.row("💰 Nạp Tiền", "📋 Lịch Sử / Khôi Phục")
+    markup.row("👤 Tài Khoản")
+    return markup
 
-# Hàm tách thông tin ngân hàng để hiển thị đẹp mắt
-def get_detailed_bank(bank_string):
-    if not bank_string or bank_string == "Chưa liên kết":
-        return {
-            "name": "❌ Chưa liên kết",
-            "stk": "❌ Chưa liên kết",
-            "holder": "❌ Chưa liên kết"
-        }
-    parts = [p.strip() for p in bank_string.split("-")]
-    return {
-        "name": parts[0] if len(parts) > 0 else bank_string,
-        "stk": parts[1] if len(parts) > 1 else "Chưa rõ",
-        "holder": parts[2] if len(parts) > 2 else "Chưa rõ"
-    }
-
-# Hàm tạo văn bản "Trạng thái cá nhân" đầy đủ thông tin
-def build_status_text(user_id, first_name):
-    uid = str(user_id)
-    if uid not in user_db:
-        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-    
-    balance = user_db[uid]["balance"]
-    bank_raw = user_db[uid]["bank"]
-    invited_count = count_invited_friends(uid)
-    total_earned = invited_count * 1000
-    
-    bank_info = get_detailed_bank(bank_raw)
-    
-    text = (
-        f"📊 **TRẠNG THÁI TÀI KHOẢN CỦA BẠN** 📊\n\n"
-        f"👤 **Người dùng:** {first_name}\n"
-        f"🆔 **ID Telegram:** `{uid}`\n"
-        f"────────────────────────\n"
-        f"👥 **Số bạn bè đã mời:** `{invited_count} người`\n"
-        f"🎁 **Tiền mời bạn bè tích lũy:** `{total_earned:,}đ`\n"
-        f"💰 **Số dư ví hiện tại:** `{balance:,}đ`\n"
-        f"────────────────────────\n"
-        f"🏦 **THÔNG TIN NHẬN TIỀN:**\n"
-        f"▪️ Ngân hàng: `{bank_info['name']}`\n"
-        f"▪️ Số tài khoản: `{bank_info['stk']}`\n"
-        f"▪️ Chủ tài khoản: `{bank_info['holder']}`\n\n"
-        f"⚠️ *Hạn mức rút tiền tối thiểu: 10.000đ*"
-    )
-    return text
-
-# 🌐 TRANG WEB QUÉT THIẾT BỊ MÁY CHỐNG GIAN LẬN
-@app.route('/verify/<uid>/<ref_id>')
-def verify_user(uid, ref_id):
-    user_agent = request.headers.get('User-Agent', 'Unknown Device')
-    device_fingerprint = str(hash(user_agent))
-    
-    try:
-        member_status = bot.get_chat_member(chat_id=int(CHAT_GROUP_ID), user_id=int(uid)).status
-        if member_status in ['left', 'kicked']:
-            return "<h3>❌ Thất bại: Bạn chưa bấm tham gia vào Nhóm chính thức của chúng tôi! Hãy vào nhóm trước rồi bấm lại link này.</h3>", 400
-    except: pass
-
-    if device_fingerprint in cheat_db and cheat_db[device_fingerprint] != uid:
-        try:
-            bot.send_message(int(ADMIN_ID), f"⚠️ **PHÁT HIỆN GIAN LẬN THIẾT BỊ:**\n👤 User ID: `{uid}` cố tình tạo nick ảo.\n❌ **Lý do:** Trùng thiết bị máy với tài khoản ID: `{cheat_db[device_fingerprint]}`", parse_mode='Markdown')
-            bot.send_message(int(uid), "❌ **Xác thực thất bại:** Hệ thống phát hiện thiết bị này đã được sử dụng để nhận thưởng trước đó.")
-        except: pass
-        return "<h3>❌ Xác thực thất bại: Một thiết bị chỉ được tính thưởng một lần duy nhất!</h3>", 400
-
-    cheat_db[device_fingerprint] = uid
-    save_json(CHEAT_FILE, cheat_db)
-    
-    if uid not in user_db:
-        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": ref_id}
-    
-    if ref_id in user_db and ref_id != uid:
-        user_db[ref_id]["balance"] += 1000
-        save_json(DATA_FILE, user_db)
-        try:
-            bot.send_message(int(ref_id), f"🎉 **Chúc mừng bạn!**\n🎁 Bạn vừa được cộng **+1.000đ** vào ví nhờ mời thành công thành viên thực tế gia nhập nhóm!", parse_mode='Markdown')
-        except: pass
-
-    try:
-        bot.send_message(int(uid), "✅ **Xác thực thành công!** Bạn đã hoàn tất quy trình. Hãy gõ lệnh /vi để kiểm tra trạng thái tài khoản của mình nhé.")
-    except: pass
-    return "<h3>✅ Xác thực thành công! Hệ thống ghi nhận bạn là người dùng thật. Hãy quay lại Telegram.</h3>", 200
-
-
-# 📥 LỆNH /START
 @bot.message_handler(commands=['start'])
-def handle_start(message):
-    uid = str(message.from_user.id)
-    uname = message.from_user.first_name
-    args = message.text.split()
-    
-    clear_markup = ReplyKeyboardRemove()
-    
-    try: bot.delete_message(message.chat.id, message.message_id)
-    except: pass
-
-    if uid not in user_db:
-        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-        save_json(DATA_FILE, user_db)
-        
-    if len(args) > 1 and user_db[uid]["invited_by"] is None:
-        ref_id = args[1]
-        if ref_id != uid and ref_id in user_db:
-            user_db[uid]["invited_by"] = ref_id
-            save_json(DATA_FILE, user_db)
-            
-            server_url = "https://bot-kiem-tra-ip.onrender.com" 
-            verify_link = f"{server_url}/verify/{uid}/{ref_id}"
-            
-            markup = InlineKeyboardMarkup()
-            markup.row(InlineKeyboardButton("1️⃣ Bước 1: Tham Gia Nhóm Chính Thức 👥", url=LINK_NHOM_CHINH_THUC))
-            markup.row(InlineKeyboardButton("2️⃣ Bước 2: Bấm Xác Minh Máy Thật 🔒", url=verify_link))
-            
-            welcome_invite = (
-                f"👋 **Chào mừng {uname} đã đến với ngày hội nhận thưởng!**\n\n"
-                f"Để hoàn tất quy trình nhận thưởng và giúp người mời bạn nhận được **1.000đ**, bạn vui lòng thực hiện đúng **2 bước** dưới đây bằng cách bấm vào các nút tương ứng:\n\n"
-                f"⚠️ *Lưu ý: Bạn bắt buộc phải vào nhóm và một thiết bị điện thoại chỉ được tính một lần duy nhất.*"
-            )
-            bot.send_message(message.chat.id, welcome_invite, reply_markup=markup, parse_mode='Markdown')
-            return
-
-    show_main_menu(message.chat.id, uname, clear_markup)
-
-def show_main_menu(chat_id, name, reply_markup_remove=None):
-    main_text = (
-        f"👑 **HỆ THỐNG KIẾM TIỀN CHÍNH THỨC V2** 👑\n\n"
-        f"Chào mừng **{name}** đã quay trở lại! Dưới đây là bảng điều khiển chức năng cá nhân của bạn. Hãy bấm vào các nút menu bên dưới để thao tác nhanh chóng:\n\n"
-        f"💰 **Chính sách:** Nhận ngay **1.000đ** cho mỗi thành viên thực tế được bạn mời tham gia vào nhóm qua link độc quyền."
+def send_welcome(message):
+    user = get_user(message.from_user.id, message.from_user.username)
+    inline_markup = types.InlineKeyboardMarkup()
+    inline_markup.add(types.InlineKeyboardButton("💬 Nhắn Tin Trực Tiếp Với Admin", url=f"https://t.me{ADMIN_USERNAME}"))
+    bot.send_message(
+        message.chat.id, 
+        f"👋 Chào mừng bạn!\n💵 Số dư: {user[2]:,} VNĐ", 
+        reply_markup=main_menu()
     )
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("🔗 Lấy Link Mời Kiếm Tiền", callback_data="menu_link"))
-    markup.row(InlineKeyboardButton("💳 Kiểm Tra Trạng Thái Ví", callback_data="menu_vi"), InlineKeyboardButton("🏦 Liên Kết Ngân Hàng", callback_data="menu_nh"))
-    markup.row(InlineKeyboardButton("💸 Rút Tiền Về Tài Khoản", callback_data="menu_rut"))
-    bot.send_message(chat_id, main_text, reply_markup=markup, parse_mode='Markdown')
+    bot.send_message(message.chat.id, "📌 Hỗ trợ & Nạp tiền:", reply_markup=inline_markup)
 
+@bot.message_handler(func=lambda message: message.text == "👤 Tài Khoản")
+def account_info(message):
+    user = get_user(message.from_user.id, message.from_user.username)
+    text = f"👤 **TÀI KHOẢN:**\n\n🆔 ID: `{user[0]}`\n🏷️ Username: @{user[1] if user[1] else 'Không có'}\n💵 Số dư: **{user[2]:,} VNĐ**"
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
-# 🕹️ XỬ LÝ SỰ KIỆN KHI NGƯỜI DÙNG BẤM CÁC NÚT MENU NỔI
-@bot.callback_query_handler(func=lambda call: True)
-def callback_listener(call):
-    uid = str(call.from_user.id)
-    uname = call.from_user.first_name
-    if uid not in user_db:
-        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-    
-    valid_callbacks = ["menu_link", "menu_vi", "menu_nh", "menu_rut", "wd_approve_", "wd_reject_"]
-    is_valid = any(call.data.startswith(cb) for cb in valid_callbacks)
-    
-    if not is_valid:
-        bot.answer_callback_query(call.id, "⚠️ Nút bấm cũ đã hết hạn! Vui lòng gõ /start để tải lại Menu mới.", show_alert=True)
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
-        return
+@bot.message_handler(func=lambda message: message.text == "💰 Nạp Tiền")
+def deposit_request(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("💵 10k", callback_data="dep_10000"),
+        types.InlineKeyboardButton("💵 20k", callback_data="dep_20000"),
+        types.InlineKeyboardButton("💵 50k", callback_data="dep_50000"),
+        types.InlineKeyboardButton("💵 100k", callback_data="dep_100000"),
+        types.InlineKeyboardButton("💵 200k", callback_data="dep_200000"),
+        types.InlineKeyboardButton("✏️ Tự nhập số khác", callback_data="dep_custom")
+    )
+    bot.send_message(
+        message.chat.id, 
+        f"💰 **NẠP TIỀN**\n\n🔹 Tối thiểu: {MIN_DEPOSIT:,}đ.\n🔹 Chọn mệnh giá hoặc tự nhập số tiền.",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
 
-    # --- XỬ LÝ NÚT DUYỆT RÚT TIỀN NHANH DÀNH CHO ADMIN ---
-    if call.data.startswith("wd_approve_") or call.data.startswith("wd_reject_"):
-        if uid != str(ADMIN_ID):
-            bot.answer_callback_query(call.id, "❌ Bạn không có quyền Admin!")
-            return
-            
-        action, target_uid, amount = call.data.split("_")[1:]
-        amount = int(amount)
-        
-        if action == "approve":
-            bot.edit_message_text(f"✅ **Đã duyệt chi:** Đã xác nhận chuyển khoản khoản tiền `{amount:,}đ` cho User ID `{target_uid}`.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-            try:
-                bot.send_message(int(target_uid), f"💸 **THÔNG BÁO TIN VUI:**\nLệnh rút tiền giá trị `{amount:,}đ` của bạn đã được Admin phê duyệt thành công! Bạn hãy kiểm tra tài khoản ngân hàng của mình nhé.")
-            except: pass
-            
-        elif action == "reject":
-            if target_uid not in user_db:
-                user_db[target_uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-            user_db[target_uid]["balance"] += amount
-            save_json(DATA_FILE, user_db)
-            
-            bot.edit_message_text(f"❌ **Đã từ chối nhanh:** Hủy lệnh rút tiền `{amount:,}đ` của User ID `{target_uid}` và hoàn lại tiền vào ví của họ.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-            try:
-                bot.send_message(int(target_uid), f"⚠️ **THÔNG BÁO TỪ CHỐI:**\nLệnh rút tiền `{amount:,}đ` của bạn không được phê duyệt. Toàn bộ số tiền đã được hệ thống hoàn trả về ví trên Bot của bạn.")
-            except: pass
-        return
-
-    # --- MENU NGƯỜI DÙNG THƯỜNG ---
-    if call.data == "menu_link":
-        bot_info = bot.get_me()
-        invite_url = f"https://t.me/{bot_info.username}?start={uid}"
-        text = (
-            f"🔗 **LINK MỜI ĐỘC QUYỀN CỦA BẠN:**\n`{invite_url}`\n\n"
-            f"📥 **Cách làm:** Bạn đè ngón tay vào link trên để copy, sau đó đem đi chia sẻ lên các hội nhóm. Khi có người bấm vào link, làm theo hướng dẫn vào nhóm + xác minh máy thành công, bạn sẽ nhận được **1.000đ** ngay lập tức!"
-        )
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
-        
-    elif call.data == "menu_vi":
-        status_text = build_status_text(uid, uname)
-        bot.send_message(call.message.chat.id, status_text, parse_mode='Markdown')
-        
-    elif call.data == "menu_nh":
-        text = (
-            f"🏦 **HƯỚNG DẰN LIÊN KẾT NGÂN HÀNG**\n\n"
-            f"Vui lòng gõ tin nhắn theo đúng cú pháp định dạng dấu gạch ngang (`-`) dưới đây để hệ thống tự động bóc tách phân loại số tài khoản rõ ràng:\n\n"
-            f"👉 Cú pháp: `/nganhang [Tên Ngân Hàng] - [Số Tài Khoản] - [Tên Chủ Khoản]`\n\n"
-            f"⚠️ *Ví dụ gõ đúng:* `/nganhang MB Bank - 0333444555 - NGUYEN VAN A`"
-        )
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
-        
-    elif call.data == "menu_rut":
-        if user_db[uid]["bank"] == "Chưa liên kết":
-            bot.send_message(call.message.chat.id, "⚠️ **Thông báo:** Bạn chưa liên kết ngân hàng nhận tiền. Hãy bấm nút **Liên Kết Ngân Hàng** trước.")
-            return
-        if user_db[uid]["balance"] < 10000:
-            bot.send_message(call.message.chat.id, f"❌ **Rút tiền thất bại:** Số dư trong ví của bạn phải đạt tối thiểu từ **10.000đ** trở lên.")
-            return
-            
-        text = (
-            f"💸 **HƯỚNG DẪN LẬP LỆNH RÚT TIỀN**\n\n"
-            f"Hệ thống cho phép bạn tùy chọn số tiền rút mong muốn (Số dư hiện tại của bạn: `{user_db[uid]['balance']:,}đ`).\n\n"
-            f"👉 Vui lòng gõ tin nhắn theo cú pháp sau:\n"
-            f"`/rut [Số_Tiền_Muốn_Rút]`\n\n"
-            f"⚠️ *Ví dụ gõ đúng để rút mười nghìn:* `/rut 10000`"
-        )
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
-
-
-# 📥 LỆNH XỬ LÝ RÚT TIỀN THEO SỐ TIỀN KHÁCH NHẬP THỦ CÔNG
-@bot.message_handler(commands=['rut'])
-def process_custom_withdraw(message):
-    uid = str(message.from_user.id)
-    if uid not in user_db:
-        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-        
-    if user_db[uid]["bank"] == "Chưa liên kết":
-        bot.reply_to(message, "⚠️ Bạn chưa liên kết ngân hàng nhận tiền. Hãy bấm nút **Liên Kết Ngân Hàng** trước.")
-        return
-
+def process_deposit_amount(message):
     try:
-        args = message.text.split()
-        if len(args) < 2:
-            bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ ví dụ: `/rut 10000` để chọn rút số tiền mong muốn.")
+        amount = int(message.text)
+        if amount < MIN_DEPOSIT:
+            bot.send_message(message.chat.id, f"❌ Tối thiểu là {MIN_DEPOSIT:,}đ. Vui lòng thử lại.")
             return
-            
-        amount = int(args[1])
-        
-        if amount < 10000:
-            bot.reply_to(message, "❌ **Thất bại:** Hạn mức rút tiền tối thiểu mỗi lần phải từ **10.000đ** trở lên.")
-            return
-            
-        if amount > user_db[uid]["balance"]:
-            bot.reply_to(message, f"❌ **Số dư không đủ:** Số dư ví của bạn hiện chỉ còn `{user_db[uid]['balance']:,}đ`, không thể rút số tiền `{amount:,}đ` được.")
-            return
-            
-        user_db[uid]["balance"] -= amount
-        bank = user_db[uid]["bank"]
-        save_json(DATA_FILE, user_db)
-        
-        bot.reply_to(message, f"✅ **Gửi lệnh rút tiền thành công!** Hệ thống đã trừ `{amount:,}đ` trong ví của bạn (Số dư còn lại: `{user_db[uid]['balance']:,}đ`) và chuyển tiếp tới lệnh phê duyệt của Admin.\n\n⏱️ **Thời gian xử lý:** Tiền sẽ được Admin kiểm tra và chuyển khoản về tài khoản của bạn trong vòng **24h** kể từ thời điểm rút.")
-        
-        admin_markup = InlineKeyboardMarkup()
-        admin_markup.row(
-            InlineKeyboardButton("✅ Duyệt Chi", callback_data=f"wd_approve_{uid}_{amount}"),
-            InlineKeyboardButton("❌ Từ Chối Nhanh", callback_data=f"wd_reject_{uid}_{amount}")
-        )
-        try:
-            bot.send_message(int(ADMIN_ID), f"🚨 **YÊU CẦU RÚT TIỀN MỚI:**\n👤 Người rút (ID): `{uid}`\n💰 Số tiền yêu cầu: `{amount:,}đ`\n🏦 Tài khoản nhận: `{bank}`\n\n👉 *Mẹo:* Bạn có thể bấm nút duyệt nhanh bên dưới, hoặc dùng lệnh gõ tay dưới đây để từ chối kèm lý do phạt:\n`/tuchoi {uid} {amount} Lý do cụ thể ở đây`", reply_markup=admin_markup, parse_mode='Markdown')
-        except: pass
+        send_deposit_to_admin(message, message.from_user.id, message.from_user.username, amount)
     except ValueError:
-        bot.reply_to(message, "⚠️ **Lỗi:** Số tiền nhập vào phải là một con số liền mạch, không chứa dấu chấm hay chữ cái (Ví dụ: 10000).")
+        bot.send_message(message.chat.id, "❌ Vui lòng nhập số hợp lệ.")
 
+def send_deposit_to_admin(message, user_id, username, amount):
+    conn = sqlite3.connect("smailpro_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO transactions (user_id, amount) VALUES (?, ?)", (user_id, amount))
+    tx_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
 
-# 📝 LỆNH GÕ TAY /VI
-@bot.message_handler(commands=['vi'])
-def check_wallet_cmd(message):
-    uid = str(message.from_user.id)
-    uname = message.from_user.first_name
-    status_text = build_status_text(uid, uname)
-    bot.reply_to(message, status_text, parse_mode='Markdown')
-
-
-# 📝 CÚ PHÁP LỆNH DÀNH CHO /NGANHANG
-@bot.message_handler(commands=['nganhang'])
-def link_bank(message):
-    uid = str(message.from_user.id)
-    bank_info = message.text.replace('/nganhang', '').strip()
-    if not bank_info:
-        bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ ví dụ: `/nganhang MB Bank - 0123456789 - NGUYEN VAN A`")
-        return
-    if uid not in user_db:
-        user_db[uid] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-        
-    user_db[uid]["bank"] = bank_info
-    save_json(DATA_FILE, user_db)
-    bot.reply_to(message, f"🎯 **Thành công:** Đã cập nhật trạng thái tài khoản ngân hàng mới của bạn!")
-
-
-# ========================================================
-# 🔥 CÁC LỆNH QUYỀN LỰC DÀNH RIÊNG CHO ADMIN 🔥
-# ========================================================
-
-# 📣 LỆNH PHÁT THÔNG BÁO QUYỀN LỰC HÀNG LOẠT
-@bot.message_handler(commands=['thongbao'])
-def admin_broadcast_message(message):
-    if str(message.from_user.id) != str(ADMIN_ID): 
-        return
+    qr_url = f"https://vietqr.io{amount}&addInfo=NAP{tx_id}&accountName=NGUYEN%20MANH%20QUYNH"
     
-    broadcast_text = message.text.replace('/thongbao', '').strip()
-    if not broadcast_text:
-        bot.reply_to(message, "⚠️ **Sai cú pháp!** Vui lòng gõ:\n`/thongbao [Nội dung thông báo cần gửi hàng loạt]`")
-        return
-        
-    all_users = list(user_db.keys())
-    total_users = len(all_users)
+    caption = f"💳 **THÔNG TIN CHUYỂN KHOẢN**\n\n🏛 Ngân hàng: Techcombank\n🔢 STK: `1097779819`\n👤 Chủ TK: NGUYEN MANH QUYNH\n💵 Số tiền: **{amount:,}đ**\n🔤 Nội dung: **NAP{tx_id}**\n\n⚠️ Quét mã QR hoặc nhập đúng nội dung chuyển khoản."
     
-    status_msg = bot.reply_to(message, f"⚡ **ĐANG PHÁT LỆNH THÔNG BÁO TOÀN DIỆN...**\n🎯 Tổng mục tiêu: `{total_users}` người dùng.")
-    
-    premium_announcement = (
-        f"🚨 ⚠️ **THÔNG BÁO KHẨN CẤP TỪ BAN QUẢN TRỊ** ⚠️ 🚨\n"
-        f"──────────────────────────────\n\n"
-        f"{broadcast_text}\n\n"
-        f"──────────────────────────────\n"
-        f"📌 *Yêu cầu tất cả thành viên nắm rõ thông tin để tránh thắc mắc.*"
+    bot.send_photo(message.chat.id, qr_url, caption=caption, parse_mode="Markdown")
+
+    admin_markup = types.InlineKeyboardMarkup()
+    admin_markup.add(
+        types.InlineKeyboardButton("✅ Duyệt", callback_data=f"approve_{tx_id}"),
+        types.InlineKeyboardButton("❌ Hủy", callback_data=f"reject_{tx_id}")
     )
-    
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("💬 Truy Cập Nhóm Chat Chính Thức 👥", url=LINK_NHOM_CHINH_THUC))
-    
-    success_count = 0
-    fail_count = 0
-    
-    for index, target_id in enumerate(all_users):
+    bot.send_message(
+        ADMIN_ID, 
+        f"💰 **YÊU CẦU NẠP TIỀN**\n🆔 Mã GD: {tx_id}\n👤 Người nạp: @{username} (`{user_id}`)\n💵 Số tiền: {amount:,}đ", 
+        reply_markup=admin_markup,
+        parse_mode="Markdown"
+    )
+
+def call_smailpro_api_gmail_premium():
+    headers = {"Authorization": f"Bearer {SMAILPRO_API_KEY}", "Accept": "application/json"}
+    params = {"domain": "gmail.com", "type": "premium"}
+    try:
+        response = requests.get(f"{SMAILPRO_API_URL}/get-email", headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return {"success": True, "email": data.get("email"), "mail_id": data.get("mail_id")}
+        return {"success": False, "error": f"Lỗi HTTP {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@bot.message_handler(func=lambda message: message.text == "📧 Thuê 1 Mail (500đ)")
+def rent_one_mail(message):
+    user = get_user(message.from_user.id, message.from_user.username)
+    if user[2] < PRICE_PER_MAIL:
+        bot.send_message(message.chat.id, f"❌ Không đủ số dư ({user[2]:,}đ). Giá thuê là {PRICE_PER_MAIL}đ.")
+        return
+
+    bot.send_message(message.chat.id, "⏳ Đang khởi tạo Gmail Premium...")
+    result = call_smailpro_api_gmail_premium()
+
+    if result["success"]:
+        email = result["email"]
+        mail_id = result["mail_id"]
+
+        update_balance(message.from_user.id, -PRICE_PER_MAIL)
+        
+        conn = sqlite3.connect("smailpro_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO rented_mails (user_id, email, mail_id) VALUES (?, ?, ?)", (message.from_user.id, email, mail_id))
+        rent_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔄 Lấy Mã OTP / Code", callback_data=f"getcode_{rent_id}"))
+        bot.send_message(message.chat.id, f"🎉 Thành công!\n📧 **Email:** `{email}`\n💸 Trừ: {PRICE_PER_MAIL}đ", reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, f"❌ Thất bại: {result['error']}.")
+
+@bot.message_handler(func=lambda message: message.text == "📦 Thuê Số Lượng")
+def bulk_rent_request(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📦 5 Mail (2.5k)", callback_data="bulk_5"),
+        types.InlineKeyboardButton("📦 10 Mail (5k)", callback_data="bulk_10"),
+        types.InlineKeyboardButton("📦 20 Mail (10k)", callback_data="bulk_20"),
+        types.InlineKeyboardButton("📦 50 Mail (25k)", callback_data="bulk_50"),
+        types.InlineKeyboardButton("✏️ Nhập số lượng khác", callback_data="bulk_custom")
+    )
+    bot.send_message(message.chat.id, "📦 **THUÊ SỐ LƯỢNG**\n🔹 Đơn giá: `500đ / 1 Mail Gmail Premium`", reply_markup=markup, parse_mode="Markdown")
+
+def process_bulk_rent_custom(message):
+    try:
+        quantity = int(message.text)
+        if quantity <= 0:
+            bot.send_message(message.chat.id, "❌ Số lượng phải lớn hơn 0.")
+            return
+        execute_bulk_rent(message, message.from_user.id, message.from_user.username, quantity)
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Vui lòng nhập số nguyên hợp lệ.")
+
+def execute_bulk_rent(message, user_id, username, quantity):
+    user = get_user(user_id, username)
+    total_cost = quantity * PRICE_PER_MAIL
+    if user[2] < total_cost:
+        bot.send_message(message.chat.id, f"❌ Không đủ số dư! Cần {total_cost:,}đ để thuê {quantity} mail. Hiện có {user[2]:,}đ.")
+        return
+
+    bot.send_message(message.chat.id, f"⏳ Đang khởi tạo {quantity} Gmail Premium...")
+    success_mails = []
+
+        for _ in range(quantity):
+        result = call_smailpro_api_gmail_premium()
+        if result["success"]:
+            email = result["email"]
+            mail_id = result["mail_id"]
+            
+            conn = sqlite3.connect("smailpro_bot.db")
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO rented_mails (user_id, email, mail_id) VALUES (?, ?, ?)", (user_id, email, mail_id))
+            rent_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            success_mails.append((rent_id, email))
+        else:
+            break  
+
+    actual_success = len(success_mails)
+    if actual_success > 0:
+        actual_cost = actual_success * PRICE_PER_MAIL
+        update_balance(user_id, -actual_cost)
+        
+        result_text = f"🎉 **Thành công ({actual_success}/{quantity}) Mail!**\n💸 Trừ: {actual_cost:,}đ\n\nDanh sách:\n"
+        markup = types.InlineKeyboardMarkup()
+        for rent_id, email in success_mails:
+            result_text += f"🔹 ID {rent_id}: `{email}`\n"
+            markup.add(types.InlineKeyboardButton(f"Check Code ID {rent_id}", callback_data=f"getcode_{rent_id}"))
+        bot.send_message(message.chat.id, result_text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "❌ Lỗi hệ thống API, không thể khởi tạo mail.")
+
+@bot.message_handler(func=lambda message: message.text == "📋 Lịch Sử / Khôi Phục")
+def rent_history(message):
+    send_history_page(message.chat.id, message.from_user.id, page=1)
+
+def send_history_page(chat_id, user_id, page=1, edit_message_id=None):
+    conn = sqlite3.connect("smailpro_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM rented_mails WHERE user_id = ?", (user_id,))
+    total_items = cursor.fetchone()
+    total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+
+    if total_items == 0:
+        bot.send_message(chat_id, "📭 Chưa có lịch sử thuê mail.")
+        conn.close()
+        return
+
+    offset = (page - 1) * ITEMS_PER_PAGE
+    cursor.execute("SELECT rent_id, email FROM rented_mails WHERE user_id = ? ORDER BY rent_id DESC LIMIT ? OFFSET ?", (user_id, ITEMS_PER_PAGE, offset))
+    rows = cursor.fetchall()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    text = f"📋 **LỊCH SỬ THUÊ (Trang {page}/{total_pages})**\n\n"
+    for row in rows:
+        text += f"🔹 ID {row}: `{row}`\n"
+        markup.add(types.InlineKeyboardButton(f"📧 Check Mail ID: {row}", callback_data=f"getcode_{row}"))
+
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(types.InlineKeyboardButton("◀️ Trước", callback_data=f"page_{page-1}"))
+    nav_buttons.append(types.InlineKeyboardButton("❓ Hướng dẫn", callback_data="help_history"))
+    if page < total_pages:
+        nav_buttons.append(types.InlineKeyboardButton("Sau ▶️", callback_data=f"page_{page+1}"))
+    markup.row(*nav_buttons)
+
+    if edit_message_id:
         try:
-            bot.send_message(int(target_id), premium_announcement, reply_markup=markup, parse_mode='Markdown')
-            success_count += 1
+            bot.edit_message_text(text, chat_id, edit_message_id, reply_markup=markup, parse_mode="Markdown")
         except Exception:
-            fail_count += 1
+            pass
+    else:
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    if call.data.startswith("page_"):
+        next_page = int(call.data.split("_"))
+        send_history_page(call.message.chat.id, call.from_user.id, page=next_page, edit_message_id=call.message.message_id)
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "help_history":
+        help_text = "📖 HƯỚNG DẪN KHÔI PHỤC MAIL:\n\n1. Chọn nút 'Check Mail ID' cần kiểm tra.\n2. Hệ thống quét hòm thư để lấy OTP mới nhất.\n3. Khôi phục hoàn toàn miễn phí."
+        bot.answer_callback_query(call.id, text=help_text, show_alert=True)
+
+    elif call.data.startswith("dep_"):
+        amount_type = call.data.split("_")
+        if amount_type == "custom":
+            bot.answer_callback_query(call.id)
+            msg = bot.send_message(call.message.chat.id, f"💵 Nhập số tiền muốn nạp (Tối thiểu {MIN_DEPOSIT:,}đ):")
+            bot.register_next_step_handler(msg, process_deposit_amount)
+        else:
+            bot.answer_callback_query(call.id)
+            send_deposit_to_admin(call.message, call.from_user.id, call.from_user.username, int(amount_type))
+
+    elif call.data.startswith("bulk_"):
+        bulk_type = call.data.split("_")
+        if bulk_type == "custom":
+            bot.answer_callback_query(call.id)
+            msg = bot.send_message(call.message.chat.id, "✏️ Nhập số lượng hòm thư muốn mua:")
+            bot.register_next_step_handler(msg, process_bulk_rent_custom)
+        else:
+            bot.answer_callback_query(call.id)
+            execute_bulk_rent(call.message, call.from_user.id, call.from_user.username, int(bulk_type))
+
+    elif call.data.startswith("approve_") or call.data.startswith("reject_"):
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "❌ Lệnh chỉ dành cho Admin!", show_alert=True)
+            return
+
+        action, tx_id = call.data.split("_")
+        conn = sqlite3.connect("smailpro_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, amount, status FROM transactions WHERE tx_id = ?", (tx_id,))
+        tx = cursor.fetchone()
+
+        if not tx or tx != 'PENDING':
+            bot.answer_callback_query(call.id, "⚠️ Lệnh đã xử lý trước đó.")
+            conn.close()
+            return
+
+        user_id, amount, _ = tx
+        if action == "approve":
+            cursor.execute("UPDATE transactions SET status = 'APPROVED' WHERE tx_id = ?", (tx_id,))
+            conn.commit()
+            update_balance(user_id, amount)
+            bot.edit_message_text(f"✅ Đã duyệt cộng {amount:,}đ cho giao dịch {tx_id}.", call.message.chat.id, call.message.message_id)
+            bot.send_message(user_id, f"🎉 Đã được cộng {amount:,}đ vào tài khoản thành công!")
+        else:
+            cursor.execute("UPDATE transactions SET status = 'REJECTED' WHERE tx_id = ?", (tx_id,))
+            conn.commit()
+            bot.edit_message_text(f"❌ Đã hủy lệnh giao dịch {tx_id}.", call.message.chat.id, call.message.message_id)
+            bot.send_message(user_id, f"❌ Lệnh nạp tiền mã {tx_id} đã bị từ chối.")
+        conn.close()
+
+    elif call.data.startswith("getcode_"):
+        rent_id = call.data.split("_")
+        conn = sqlite3.connect("smailpro_bot.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT mail_id, email FROM rented_mails WHERE rent_id = ?", (rent_id,))
+        mail_data = cursor.fetchone()
+        conn.close()
+
+        if mail_data:
+            mail_id, email = mail_data
+            bot.answer_callback_query(call.id, text=f"⏳ Đang check {email}...")
             
-        if index % 20 == 0 and index > 0:
-            time.sleep(1)
-            
-    bot.edit_message_text(
-        f"👑 **CHIẾN DỊCH PHÁT THÔNG BÁO HOÀN TẤT THÀNH CÔNG!**\n\n"
-        f"📊 **Báo cáo trạng thái hệ thống:**\n"
-        f"▪️ Đã tiếp cận: `{success_count}/{total_users}` người dùng thật.\n"
-        f"▪️ Thất bại (Nick ảo/Đã chặn Bot): `{fail_count}`",
-        status_msg.chat.id, status_msg.message_id
-    )
+            headers = {"Authorization": f"Bearer {SMAILPRO_API_KEY}"}
+            try:
+                response = requests.get(f"{SMAILPRO_API_URL}/get-messages?mail_id={mail_id}", headers=headers, timeout=10)
+                messages = response.json()
+                
+                if response.status_code == 200 and messages:
+                    latest_msg = messages if isinstance(messages, list) else messages
+                    subject = latest_msg.get("subject", "Không tiêu đề")
+                    body = latest_msg.get("body", "Trống")
+                    bot.send_message(call.message.chat.id, f"📩 **HỘP THƯ ĐẾN:** `{email}`\n📌 **Tiêu đề:** {subject}\n📝 **Nội dung:**\n\n`{body}`", parse_mode="Markdown")
+                else:
+                    bot.send_message(call.message.chat.id, f"📭 Hòm thư `{email}` hiện chưa có thư mới. Thử lại sau ít giây.")
+            except Exception:
+                bot.send_message(call.message.chat.id, "❌ Lỗi kết nối mạng khi tải tin nhắn.")
+        else:
+            bot.answer_callback_query(call.id, text="❌ Không tồn tại dữ liệu mail!", show_alert=True)
 
-# 1. LỆNH CỘNG TIỀN THỦ CÔNG
-@bot.message_handler(commands=['congtien'])
-def admin_add_money(message):
-    if str(message.from_user.id) != str(ADMIN_ID): return
-    try:
-        args = message.text.split()
-        target_id = args[1]
-        amount = int(args[2])
-        if target_id not in user_db: user_db[target_id] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-        user_db[target_id]["balance"] += amount
-        save_json(DATA_FILE, user_db)
-        bot.reply_to(message, f"✅ Đã cộng thành công **+{amount:,}đ** cho tài khoản ID: `{target_id}`")
-        try: bot.send_message(int(target_id), f"💰 Admin vừa cộng **+{amount:,}đ** vào ví của bạn!")
-        except: pass
-    except: bot.reply_to(message, "⚠️ Gõ lệnh: `/congtien [ID_Telegram] [Số_Tiền]`")
-
-# 2. LỆNH TỪ CHỐI DUYỆT TIỀN + KÈM LÝ DO CỤ THỂ
-@bot.message_handler(commands=['tuchoi'])
-def admin_reject_money_with_reason(message):
-    if str(message.from_user.id) != str(ADMIN_ID): return
-    try:
-        args = message.text.split(maxsplit=3)
-        target_id = args[1]
-        amount = int(args[2])
-        reason = args[3]
-        
-        if target_id not in user_db:
-            user_db[target_id] = {"balance": 0, "bank": "Chưa liên kết", "invited_by": None}
-            
-        user_db[target_id]["balance"] += amount
-        save_json(DATA_FILE, user_db)
-            
-        bot.reply_to(message, f"❌ **Đã xử lý từ chối:** Hủy yêu cầu rút `{amount:,}đ` của ID `{target_id}`.\n📌 Lý do: {reason}\n💰 *Hệ thống đã hoàn trả lại số tiền này vào ví của họ.*")
-        try:
-            bot.send_message(int(target_id), f"❌ **LỆNH RÚT TIỀN BỊ TỪ CHỐI:**\nYêu cầu rút `{amount:,}đ` của bạn đã bị Admin từ chối.\n⚠️ **Lý do hệ thống đưa ra:** {reason}\n\n💰 *(Toàn bộ số tiền đã được hoàn trả lại về số dư ví trên Bot của bạn)*")
-        except: pass
-    except:
-        bot.reply_to(message, "⚠️ Cú pháp lệnh từ chối: `/tuchoi [ID_Người_Dùng] [Số_Tiền] [Lý do viết tiếng Việt tự do]`")
-
-
-def run_web():
-    app.run(host='0.0.0.0', port=8080)
-
-if __name__ == '__main__':
-    threading.Thread(target=run_web).start()
-    print("=== NEW BOT SYSTEM ONLINE WITH BROADCAST FUNCTION ===")
-    bot.infinity_polling()
+bot.polling(none_stop=True)
