@@ -3,10 +3,10 @@ import telebot
 from telebot import types
 import requests
 
-TELEGRAM_TOKEN = "THAY_THE_TOKEN_TELEGRAM_CỦA_BẠN"
+TELEGRAM_TOKEN = "8673445877:AAHqzQrt2tNeOETRTKxJXj7ak4qF9naLSFA"
 SMAILPRO_API_KEY = "2e77c6695f94c9784452388e9b9dc3f7463e19e16ed05f4125dc838e058c0798"
-ADMIN_ID = 123456789
-ADMIN_USERNAME = "THAY_USERNAME_ADMIN_KHONG_CHUA_DAU_ATC"
+ADMIN_ID = 7865006773
+ADMIN_USERNAME = "nmqsk001"
 
 PRICE_PER_MAIL = 500
 MIN_DEPOSIT = 10000
@@ -122,8 +122,7 @@ def send_deposit_to_admin(message, user_id, username, amount):
     conn.close()
 
     qr_url = f"https://vietqr.io{amount}&addInfo=NAP{tx_id}&accountName=NGUYEN%20MANH%20QUYNH"
-    
-    caption = f"💳 **THÔNG TIN CHUYỂN KHOẢN**\n\n🏛 Ngân hàng: Techcombank\n🔢 STK: `1097779819`\n👤 Chủ TK: NGUYEN MANH QUYNH\n💵 Số tiền: **{amount:,}đ**\n🔤 Nội dung: **NAP{tx_id}**\n\n⚠️ Quét mã QR hoặc nhập đúng nội dung chuyển khoản."
+    caption = f"CN\n\n🏛 Ngân hàng: Techcombank\n🔢 STK: `1097779819`\n👤 Chủ TK: NGUYEN MANH QUYNH\n💵 Số tiền: **{amount:,}đ**\n🔤 Nội dung: **NAP{tx_id}**\n\n⚠️ Quét mã QR hoặc nhập đúng nội dung chuyển khoản."
     
     bot.send_photo(message.chat.id, qr_url, caption=caption, parse_mode="Markdown")
 
@@ -212,7 +211,7 @@ def execute_bulk_rent(message, user_id, username, quantity):
     bot.send_message(message.chat.id, f"⏳ Đang khởi tạo {quantity} Gmail Premium...")
     success_mails = []
 
-        for _ in range(quantity):
+    for _ in range(quantity):
         result = call_smailpro_api_gmail_premium()
         if result["success"]:
             email = result["email"]
@@ -250,7 +249,7 @@ def send_history_page(chat_id, user_id, page=1, edit_message_id=None):
     conn = sqlite3.connect("smailpro_bot.db")
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM rented_mails WHERE user_id = ?", (user_id,))
-    total_items = cursor.fetchone()
+    total_items = cursor.fetchone()[0]
     total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
 
     if total_items == 0:
@@ -266,8 +265,8 @@ def send_history_page(chat_id, user_id, page=1, edit_message_id=None):
     markup = types.InlineKeyboardMarkup()
     text = f"📋 **LỊCH SỬ THUÊ (Trang {page}/{total_pages})**\n\n"
     for row in rows:
-        text += f"🔹 ID {row}: `{row}`\n"
-        markup.add(types.InlineKeyboardButton(f"📧 Check Mail ID: {row}", callback_data=f"getcode_{row}"))
+        text += f"🔹 ID {row[0]}: `{row[1]}`\n"
+        markup.add(types.InlineKeyboardButton(f"📧 Check Mail ID: {row[0]}", callback_data=f"getcode_{row[0]}"))
 
     nav_buttons = []
     if page > 1:
@@ -288,7 +287,7 @@ def send_history_page(chat_id, user_id, page=1, edit_message_id=None):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     if call.data.startswith("page_"):
-        next_page = int(call.data.split("_"))
+        next_page = int(call.data.split("_")[1])
         send_history_page(call.message.chat.id, call.from_user.id, page=next_page, edit_message_id=call.message.message_id)
         bot.answer_callback_query(call.id)
 
@@ -297,7 +296,7 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, text=help_text, show_alert=True)
 
     elif call.data.startswith("dep_"):
-        amount_type = call.data.split("_")
+        amount_type = call.data.split("_")[1]
         if amount_type == "custom":
             bot.answer_callback_query(call.id)
             msg = bot.send_message(call.message.chat.id, f"💵 Nhập số tiền muốn nạp (Tối thiểu {MIN_DEPOSIT:,}đ):")
@@ -307,7 +306,7 @@ def callback_handler(call):
             send_deposit_to_admin(call.message, call.from_user.id, call.from_user.username, int(amount_type))
 
     elif call.data.startswith("bulk_"):
-        bulk_type = call.data.split("_")
+        bulk_type = call.data.split("_")[1]
         if bulk_type == "custom":
             bot.answer_callback_query(call.id)
             msg = bot.send_message(call.message.chat.id, "✏️ Nhập số lượng hòm thư muốn mua:")
@@ -327,7 +326,7 @@ def callback_handler(call):
         cursor.execute("SELECT user_id, amount, status FROM transactions WHERE tx_id = ?", (tx_id,))
         tx = cursor.fetchone()
 
-        if not tx or tx != 'PENDING':
+        if not tx or tx[2] != 'PENDING':
             bot.answer_callback_query(call.id, "⚠️ Lệnh đã xử lý trước đó.")
             conn.close()
             return
@@ -347,7 +346,7 @@ def callback_handler(call):
         conn.close()
 
     elif call.data.startswith("getcode_"):
-        rent_id = call.data.split("_")
+        rent_id = call.data.split("_")[1]
         conn = sqlite3.connect("smailpro_bot.db")
         cursor = conn.cursor()
         cursor.execute("SELECT mail_id, email FROM rented_mails WHERE rent_id = ?", (rent_id,))
@@ -364,7 +363,7 @@ def callback_handler(call):
                 messages = response.json()
                 
                 if response.status_code == 200 and messages:
-                    latest_msg = messages if isinstance(messages, list) else messages
+                    latest_msg = messages[0] if isinstance(messages, list) else messages
                     subject = latest_msg.get("subject", "Không tiêu đề")
                     body = latest_msg.get("body", "Trống")
                     bot.send_message(call.message.chat.id, f"📩 **HỘP THƯ ĐẾN:** `{email}`\n📌 **Tiêu đề:** {subject}\n📝 **Nội dung:**\n\n`{body}`", parse_mode="Markdown")
